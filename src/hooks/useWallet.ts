@@ -80,6 +80,112 @@ export const useWallet = (): KeplrAuthContext => {
     }
   }, [])
 
+  // Listen for Keplr account changes
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isKeplrInstalled()) return
+
+    const handleAccountChange = async () => {
+      console.log('👂 Keplr account changed detected')
+      
+      // Check if we had a previous session
+      const existingSession = loadSession()
+      if (existingSession && isSessionValid(existingSession)) {
+        try {
+          // Try to get current wallet info
+          const info = await getWalletInfo()
+          
+          // If the address changed, clear session and reset state
+          if (info.address !== existingSession.address) {
+            console.log('🔄 Account switched, clearing old session')
+            clearSession()
+            resetState()
+          } else {
+            // Same account, update wallet info in case name changed
+            setWalletInfo(info)
+          }
+        } catch (error) {
+          console.log('⚠️ Failed to get wallet info after account change, clearing session:', error)
+          clearSession()
+          resetState()
+        }
+      }
+    }
+
+    const handleDisconnect = () => {
+      console.log('👂 Keplr disconnected')
+      clearSession()
+      resetState()
+    }
+
+    // Add event listeners for Keplr account changes
+    window.addEventListener('keplr_keystorechange', handleAccountChange)
+    
+    // Some versions of Keplr use this event
+    if (window.keplr) {
+      window.keplr.addEventListener?.('accountsChanged', handleAccountChange)
+      window.keplr.addEventListener?.('disconnect', handleDisconnect)
+    }
+
+    return () => {
+      // Cleanup event listeners
+      window.removeEventListener('keplr_keystorechange', handleAccountChange)
+      if (window.keplr) {
+        window.keplr.removeEventListener?.('accountsChanged', handleAccountChange)
+        window.keplr.removeEventListener?.('disconnect', handleDisconnect)
+      }
+    }
+  }, [resetState])
+
+  // Periodic check for wallet connection (in case user connects externally)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isKeplrInstalled()) return
+
+    const checkWalletConnection = async () => {
+      // Only check if we're not already connected
+      if (isConnected) return
+      
+      try {
+        // Try to get wallet info without explicitly enabling
+        // This will work if the user is already connected to the site
+        const info = await getWalletInfo()
+        
+        // If we get wallet info and don't have a session, the user connected externally
+        const existingSession = loadSession()
+        if (info && !existingSession) {
+          console.log('🔍 External wallet connection detected, creating session')
+          
+          // Create a new session
+          const message = generateSessionMessage(info.address)
+          const signature = await signArbitraryMessage(message, info.address)
+          
+          const newSession: WalletSession = {
+            address: info.address,
+            signature: JSON.stringify(signature),
+            timestamp: Date.now()
+          }
+          
+          saveSession(newSession)
+          setWalletInfo(info)
+          setSession(newSession)
+          setIsConnected(true)
+          
+          console.log('✅ External wallet connection established:', info.address)
+        }
+      } catch (error) {
+        // Ignore errors - user probably hasn't connected yet
+        console.log('🔍 No external wallet connection detected:', error)
+      }
+    }
+
+    // Check immediately and then every 2 seconds
+    checkWalletConnection()
+    const interval = setInterval(checkWalletConnection, 2000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [isConnected])
+
   const connect = useCallback(async () => {
     setIsConnecting(true)
     setError(null)

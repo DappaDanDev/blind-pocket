@@ -1,5 +1,6 @@
 import WalletConnect from '@/components/WalletConnect'
 import VaultManager from '@/components/VaultManager'
+import '@/utils/network-logger' // Initialize network logging
 
 export default function Home() {
   return (

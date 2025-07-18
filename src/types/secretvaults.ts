@@ -57,22 +57,16 @@ export class VaultError extends Error {
 export const VAULT_SESSION_KEY = 'secretvault_session'
 export const COLLECTION_NAME = 'bookmarks'
 
-// Configuration for different environments (based on official docs)
+// Configuration using official network config from Nillion docs
 export const VAULT_CONFIG = {
   TESTNET: {
+    // Using official NILCHAIN_URL from network config
     chainUrl: 'http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz',
     authUrl: 'https://nilauth.sandbox.app-cluster.sandbox.nilogy.xyz',
     dbUrls: [
-      'https://nildb-nx8v.nillion.network',
-      'https://nildb-p3mx.nillion.network',
-      'https://nildb-rugk.nillion.network',
-      'https://nildb-5ab1.nillion.network',
-      'https://nildb-906d.kjnodes.com',
-      'https://nildb-8001.cloudician.xyz',
-      'https://nildb-ddb5.imperator.co',
-      'https://nildb-f496.pairpointweb3.io',
-      'https://nildb-f375.stcbahrain.net',
-      'https://nildb-2140.staking.telekom-mms.com'
+      'https://nildb-stg-n1.nillion.network',
+      'https://nildb-stg-n2.nillion.network',
+      'https://nildb-stg-n3.nillion.network'
     ] as string[]
   },
   DEVNET: {

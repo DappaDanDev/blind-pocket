@@ -38,40 +38,80 @@ This is a Next.js project called "blind-pocket" with TypeScript and Tailwind CSS
 5. UI should show vault status and bookmark interface
 
 ## Recent Changes
-- **REMOVED**: Proxy implementation (was causing SSL certificate issues)
-- **REVERTED**: Back to direct SecretVault TypeScript implementation
-- **SWITCHED**: From testnet to devnet (testnet has SSL certificate issues)
-- Improved vault initialization with race condition prevention
+- **FIXED**: Proper SecretVault.ts implementation (direct nilDB API approach)
+- **REMOVED**: Blockchain RPC endpoints (was causing hybrid implementation issues)
+- **USING**: Direct nilDB testnet nodes for SecretVault operations
+- **SIMPLIFIED**: Vault initialization to follow proper SDK pattern
 - Enhanced UI with better state management and status indicators
 - Added comprehensive logging for debugging vault creation
-- Fixed wallet connection state management
+- Fixed wallet connection state management with event listeners
 
 ## Current Status
 - ✅ Direct SecretVault implementation using @nillion/secretvaults
-- ✅ Using devnet configuration (better SSL certificate support)
+- ✅ Using TESTNET configuration (per user requirement)
 - ✅ Comprehensive debugging and logging
 - ✅ Better UI state management
 - ✅ Development server running on http://localhost:3000
+- ✅ Wallet connection detection with event listeners
 
 ## SecretVault Configuration
 - **Environment**: TESTNET (using official URLs from Nillion docs)
 - **Package**: @nillion/secretvaults v0.1.1
-- **Implementation**: Direct TypeScript SecretVault client
-- **Authentication**: Using nilpay organization credentials from .env
-- **Chain URL**: http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz
+- **Implementation**: Direct SecretVault.ts SDK following official network config
+- **Authentication**: Using builder keypair from .env following official quickstart
+- **Chain URL**: `http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz` (official NILCHAIN_URL)
 - **Auth URL**: https://nilauth.sandbox.app-cluster.sandbox.nilogy.xyz
-- **DB URLs**: 10 official nilDB testnet nodes
-- **Credentials**: NEXT_PUBLIC_NILLION_PRIVATE_KEY and NEXT_PUBLIC_NILLION_PUBLIC_KEY from .env
+- **DB URLs**: Official nilDB testnet nodes (all HTTPS)
+- **Credentials**: NEXT_PUBLIC_NILLION_PRIVATE_KEY (builder private key) from .env
 
 ## What to Test Next
 1. Connect Keplr wallet (should show "Wallet Connected")
 2. Watch for vault initialization (should show progress, then "Vault Active")
-3. Try creating a sample bookmark
-4. Check browser console for detailed logs
-5. Verify vault status indicators in UI
+3. **Check browser console for detailed step-by-step logs**
+4. **Network logs will be automatically saved to a JSON file for analysis**
+5. Try creating a sample bookmark
+6. Verify vault status indicators in UI
+
+## Network Logging & Issues Fixed
+- **Comprehensive logging**: All network requests to Nillion endpoints are intercepted and logged
+- **Step-by-step tracking**: Each vault initialization step is logged with detailed payloads
+- **Auto-save logs**: Network logs are automatically saved to a JSON file for troubleshooting
+- **Browser console**: Detailed console logs show the exact sequence of operations
+
+### Issues Found & Fixed:
+1. **Builder Registration API Error**: Fixed `did` field type mismatch (was sending object, API expects string)
+2. **Response Body Consumption**: Fixed network logger consuming response body twice
+3. **Request Sequencing**: SDK makes parallel requests to all nilDB nodes (expected behavior)
 
 ## Troubleshooting
-- SSL certificate issues resolved by using devnet
+- Using TESTNET configuration as requested
 - Direct SecretVault implementation (no proxy)
 - Check browser console for detailed initialization logs
 - Wallet connection state should be properly synchronized
+- If network errors occur, check browser console for CORS/mixed content issues
+
+## Implementation Approach
+
+### Fixed: Correct Network Configuration
+**Issue**: Was using wrong URL structure and trying to proxy HTTP endpoints:
+- Used nilDB nodes directly as chain URL (caused 404 errors)
+- Attempted proxy workarounds that caused SDK validation errors
+- SDK expects full URLs, not relative paths
+
+**Solution**: Use official network configuration exactly as specified:
+- **Chain URL**: `http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz` (official NILCHAIN_URL)
+- **Auth URL**: `https://nilauth.sandbox.app-cluster.sandbox.nilogy.xyz` (official NILAUTH_URL)
+- **DB URLs**: Array of official nilDB testnet nodes (NILDB_NODE_1, NILDB_NODE_2, NILDB_NODE_3)
+
+### Mixed Content Issue
+The HTTP chain URL will cause mixed content errors on HTTPS pages. Options:
+1. **Run dev server on HTTP**: Access app via `http://localhost:3000`
+2. **Use dev:http script**: `npm run dev:http` for HTTP-only development
+3. **Browser security bypass**: Use `--disable-web-security` flag (development only)
+
+### Current Configuration
+- **Chain**: Direct to `http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz`
+- **Auth**: Direct to `https://nilauth.sandbox.app-cluster.sandbox.nilogy.xyz`
+- **DB**: Array of nilDB testnet nodes (all HTTPS)
+
+This matches the exact official network configuration from Nillion docs.

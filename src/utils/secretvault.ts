@@ -10,6 +10,7 @@ import {
   COLLECTION_NAME,
   VAULT_CONFIG 
 } from '@/types/secretvaults'
+import { networkLogger } from './network-logger'
 
 // Global vault instance for session persistence
 let vaultInstance: SecretVaultBuilderClient | null = null
@@ -57,6 +58,10 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
 
   console.log('🏗️ Initializing SecretVault for user:', options.userAddress)
   
+  // Clear previous logs and start fresh
+  networkLogger.clearLogs()
+  console.log('📋 Network logging enabled - all requests will be tracked')
+  
   // Create initialization promise to prevent race conditions
   initializationPromise = (async () => {
     try {
@@ -69,67 +74,83 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
         dbUrls: config.dbUrls
       })
     
-    // Create keypair from Nillion organization private key
-    const privateKey = process.env.NEXT_PUBLIC_NILLION_PRIVATE_KEY
-    if (!privateKey) {
+    // Create keypair from builder private key (following official quickstart)
+    const builderPrivateKey = process.env.NEXT_PUBLIC_NILLION_PRIVATE_KEY
+    if (!builderPrivateKey) {
       throw new VaultError('NEXT_PUBLIC_NILLION_PRIVATE_KEY not found in environment variables', 'MISSING_PRIVATE_KEY')
     }
     
     // Convert hex private key to bytes for Keypair.from()
     const privateKeyBytes = new Uint8Array(
-      privateKey.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+      builderPrivateKey.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
     )
     
-    const keypair = Keypair.from(privateKeyBytes)
+    const builderKeypair = Keypair.from(privateKeyBytes)
 
-    // Initialize SecretVault client with proper configuration
-    const client = await SecretVaultBuilderClient.from({
-      keypair,
-      urls: {
-        chain: options.chainUrl || config.chainUrl,
-        auth: options.authUrl || config.authUrl,
-        dbs: options.dbUrls || config.dbUrls
-      },
-      blindfold: {
-        operation: 'store',
-        useClusterKey: true
-      }
-    })
-
-    console.log('✅ SecretVault client initialized')
-
-    // Register builder if not already registered
+    // Initialize SecretVault client with direct nilDB API access
+    console.log('🔄 STEP 1: Initializing SecretVault client...')
+    let client
     try {
-      await client.register({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        did: client.did as any,
-        name: `BookmarkVault_${options.userAddress.slice(0, 8)}`
-      })
-      console.log('✅ Builder registered')
-    } catch (error) {
-      console.log('ℹ️ Builder already registered or registration failed:', error)
+      const clientConfig = {
+        keypair: builderKeypair,
+        urls: {
+          chain: options.chainUrl || config.chainUrl,
+          auth: options.authUrl || config.authUrl,
+          dbs: options.dbUrls || config.dbUrls
+        }
+      }
+      console.log('📋 Client config:', clientConfig)
+      
+      client = await SecretVaultBuilderClient.from(clientConfig)
+      console.log('✅ STEP 1 COMPLETE: SecretVault client initialized')
+      
+      // Refresh root token (following official quickstart)
+      console.log('🔄 STEP 2: Refreshing root token...')
+      await client.refreshRootToken()
+      console.log('✅ STEP 2 COMPLETE: Root token refreshed')
+    } catch (clientError) {
+      console.error('❌ STEP 1/2 FAILED: SecretVault client initialization failed:', clientError)
+      // Save logs for analysis
+      networkLogger.saveLogs()
+      throw new VaultError(
+        `Failed to initialize SecretVault client: ${clientError instanceof Error ? clientError.message : 'Unknown error'}`,
+        'CLIENT_INIT_FAILED'
+      )
     }
 
-    // Create or get collection for bookmarks
-    let collectionId: string
-
+    // Register builder (required for SecretVault operations)
     try {
-      // Try to read existing collections
-      let collections
-      try {
-        collections = await client.readCollections()
-      } catch {
-        console.log('ℹ️ No existing collections found, will create new one')
-        collections = { data: [] }
+      console.log('🔄 STEP 3: Registering builder...')
+      const registerPayload = {
+        did: client.did.toString(), // Convert to string as expected by API
+        name: `BookmarkVault_${options.userAddress.slice(0, 8)}`
       }
+      console.log('📋 Register payload:', registerPayload)
       
-      const existingCollection = collections.data.find(col => col.name === COLLECTION_NAME)
+      await client.register(registerPayload)
+      console.log('✅ STEP 3 COMPLETE: Builder registered')
+    } catch (error) {
+      console.log('⚠️ STEP 3 WARNING: Builder registration failed (may already be registered):', error)
+      // Continue anyway - this is often expected
+    }
+
+    // Set up collection for bookmarks
+    let collectionId: string
+    
+    try {
+      // Try to read existing collections first
+      console.log('🔄 STEP 4: Reading existing collections...')
+      const collections = await client.readCollections()
+      console.log('📋 Collections response:', collections)
+      
+      const existingCollection = collections.data?.find(col => col.name === COLLECTION_NAME)
       
       if (existingCollection) {
-        collectionId = existingCollection.name
-        console.log('✅ Using existing collection:', collectionId)
+        collectionId = existingCollection._id || existingCollection.name
+        console.log('✅ STEP 4 COMPLETE: Using existing collection:', collectionId)
       } else {
-        // Create new collection for empty vault
+        // Create new collection
+        console.log('🔄 STEP 5: Creating new collection...')
         collectionId = uuidv4()
         
         const bookmarkSchema = {
@@ -148,32 +169,28 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
           required: ['id', 'title', 'url', 'created_at']
         }
 
-        console.log('🏗️ Creating new collection for empty vault:', collectionId)
-        
-        await client.createCollection({
+        const createPayload = {
           _id: collectionId,
           type: 'standard',
           name: COLLECTION_NAME,
           schema: bookmarkSchema
-        })
+        }
         
-        console.log('✅ Collection created successfully:', collectionId)
+        console.log('📋 Create collection payload:', createPayload)
+        
+        const createResult = await client.createCollection(createPayload)
+        console.log('📋 Create collection response:', createResult)
+        
+        console.log('✅ STEP 5 COMPLETE: Collection created successfully')
       }
     } catch (error) {
-      console.error('❌ Collection setup failed:', error)
-      
-      // If collection creation fails, try to use a fallback approach
-      if (error instanceof Error && error.message.includes('collection')) {
-        console.log('⚠️ Attempting fallback collection creation...')
-        try {
-          collectionId = `${COLLECTION_NAME}_${Date.now()}`
-          console.log('✅ Using fallback collection ID:', collectionId)
-        } catch {
-          throw new VaultError('Failed to setup bookmarks collection', 'COLLECTION_SETUP_FAILED')
-        }
-      } else {
-        throw new VaultError('Failed to setup bookmarks collection', 'COLLECTION_SETUP_FAILED')
-      }
+      console.error('❌ STEP 4/5 FAILED: Collection setup failed:', error)
+      // Save logs for analysis
+      networkLogger.saveLogs()
+      throw new VaultError(
+        `Failed to setup bookmarks collection: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'COLLECTION_SETUP_FAILED'
+      )
     }
 
     // Cache the instances
@@ -189,11 +206,21 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
     }
     saveVaultSession(session)
 
-      console.log('✅ Vault initialization complete')
+      console.log('✅ STEP 6 COMPLETE: Vault initialization complete')
+      
+      // Save logs for analysis
+      console.log('📁 Saving network logs for analysis...')
+      networkLogger.saveLogs()
+      
       return { client, collectionId }
       
     } catch (error) {
-      console.error('❌ Vault initialization failed:', error)
+      console.error('❌ VAULT INITIALIZATION FAILED:', error)
+      
+      // Save logs for analysis before throwing
+      console.log('📁 Saving network logs for troubleshooting...')
+      networkLogger.saveLogs()
+      
       // Clear failed initialization state
       vaultInstance = null
       currentCollectionId = null
