@@ -1,6 +1,7 @@
 import { SecretVaultBuilderClient } from '@nillion/secretvaults'
 
 export interface BookmarkData {
+  _id?: string  // SDK required field for records
   id: string
   title: string
   url: string
