@@ -5,7 +5,7 @@ export interface BookmarkData {
   id: string
   title: string
   url: string
-  description: string
+  description: string | { "%share": string }  // Can be plain string or secret-shared
   image: string
   tags: string[]
   archived: boolean

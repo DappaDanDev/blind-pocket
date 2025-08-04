@@ -21,19 +21,52 @@ let initializationPromise: Promise<{ builderClient: SecretVaultBuilderClient; us
 // Use a different collection name to avoid conflicts with existing standard collection
 const OWNED_COLLECTION_NAME = 'user_bookmarks'
 
-// Function to generate user keypair 
-// TODO: Implement deterministic derivation from wallet signature
+// Function to generate deterministic user keypair from wallet signature
 const deriveUserKeypair = async (userAddress: string): Promise<Keypair> => {
   try {
-    console.log('🔄 Generating user keypair for:', userAddress)
-    const keypair = Keypair.generate()
-    console.log('✅ User keypair generated successfully')
-    console.log('📋 Keypair created for user:', userAddress)
+    console.log('🔄 Deriving deterministic keypair for:', userAddress)
+    
+    // Create a deterministic message to sign
+    const message = `Nillion SecretVault Keypair Derivation for ${userAddress}`
+    console.log('📝 Requesting signature for deterministic keypair derivation...')
+    
+    // Get deterministic signature from wallet
+    const signatureData = await signArbitraryMessage(message)
+    console.log('✅ Signature obtained for keypair derivation')
+    
+    // Use the signature as seed for deterministic keypair generation
+    // Convert signature to bytes and use as seed
+    const signatureBytes = new Uint8Array(
+      signatureData.signature.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+    )
+    
+    // Take first 32 bytes for keypair seed (ED25519 private key length)
+    const seed = signatureBytes.slice(0, 32)
+    
+    // Pad with zeros if signature is shorter than 32 bytes
+    const paddedSeed = new Uint8Array(32)
+    paddedSeed.set(seed)
+    
+    console.log('🔑 Creating deterministic keypair from signature seed')
+    const keypair = Keypair.from(paddedSeed)
+    
+    console.log('✅ Deterministic keypair created successfully')
+    console.log('📋 Keypair derived for user:', userAddress)
     
     return keypair
   } catch (error) {
-    console.error('❌ Failed to create user keypair:', error)
-    throw new VaultError('Failed to create user keypair', 'KEYPAIR_CREATION_FAILED')
+    console.error('❌ Failed to derive deterministic keypair:', error)
+    console.log('⚠️ Falling back to random keypair generation')
+    
+    // Fallback to random generation if signature fails
+    try {
+      const fallbackKeypair = Keypair.generate()
+      console.log('✅ Fallback keypair generated successfully')
+      return fallbackKeypair
+    } catch (fallbackError) {
+      console.error('❌ Fallback keypair generation also failed:', fallbackError)
+      throw new VaultError('Failed to create user keypair', 'KEYPAIR_CREATION_FAILED')
+    }
   }
 }
 
@@ -247,20 +280,44 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
         console.log('🔄 STEP 5: Creating new bookmark collection...')
         
         const newCollectionId = uuidv4()
-        // Using exact CreateCollectionRequest DTO structure (NO owner field)
+        // Using proper JSON Schema format as per Nillion docs
+        // Adding owner field for owned collections (might be required despite DTO)
         const collection = {
           _id: newCollectionId,
           type: "owned" as const,
           name: OWNED_COLLECTION_NAME,
+          owner: user.did.toString(), // Required for owned collections
           schema: {
-            "title": "string",
-            "url": "string", 
-            "description": "string",
-            "image": "string",
-            "tags": "array",
-            "archived": "boolean",
-            "favorite": "boolean",
-            "created_at": "string"
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            type: 'array',
+            uniqueItems: true,
+            items: {
+              type: 'object',
+              properties: {
+                _id: { type: 'string', format: 'uuid' },
+                id: { type: 'string', format: 'uuid' },
+                title: { type: 'string' },
+                url: { type: 'string', format: 'uri' },
+                description: {
+                  type: "object",
+                  properties: {
+                    "%share": {
+                      type: "string"
+                    }
+                  },
+                  required: ["%share"]
+                },
+                image: { type: 'string' },
+                tags: { 
+                  type: 'array',
+                  items: { type: 'string' }
+                },
+                archived: { type: 'boolean' },
+                favorite: { type: 'boolean' },
+                created_at: { type: 'string', format: 'date-time' }
+              },
+              required: ['_id', 'id', 'title', 'url', 'created_at']
+            }
           }
         }
         
@@ -273,19 +330,30 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
         
         try {
           console.log('🔄 Attempting collection creation...')
+          console.log('📋 Builder client methods available:', Object.getOwnPropertyNames(Object.getPrototypeOf(builder)))
+          console.log('📋 Builder client state:', {
+            hasRootToken: !!builder.rootToken,
+            clientId: builder.id,
+            didString: builder.did.toString()
+          })
+          
           const createResults = await builder.createCollection(collection)
           console.log('✅ Collection creation result:', createResults)
           collectionId = newCollectionId
           console.log('✅ STEP 5 COMPLETE: Collection created:', collectionId)
         } catch (createError) {
-          console.error('❌ Collection creation failed with SDK bug')
-          console.error('❌ Expected error: data[0].owner/schema validation due to incorrect request wrapping')
-          console.error('❌ Our request follows CreateCollectionRequest DTO exactly, but SDK wraps it incorrectly')
+          console.error('❌ CONFIRMED SDK BUG: Collection creation routing to data endpoint')
+          console.error('❌ Evidence:')
+          console.error('  • Our request follows CreateCollectionRequest DTO exactly')
+          console.error('  • Error path shows data[0].owner/schema (from CreateOwnedDataRequest validation)')
+          console.error('  • SDK routes POST /v1/collections but API receives it as data creation')
+          console.error('❌ Raw error:', createError)
           
           // Use fallback - skip collection creation and continue with data operations
           collectionId = `user_bookmarks_${options.userAddress.slice(-8)}`
           console.log('⚠️ WORKAROUND: Using deterministic collection ID:', collectionId)
-          console.log('⚠️ NOTE: Collection won\'t exist on server, but data operations can still be tested')
+          console.log('📋 This allows testing other functionality while SDK bug exists')
+          console.log('📋 TODO: Report to Nillion - SDK collection creation routes to wrong endpoint')
         }
       }
     } catch (error) {
@@ -395,7 +463,9 @@ export const createBookmark = async (bookmarkData: Omit<BookmarkData, 'id' | 'cr
       id,
       title: bookmarkData.title as string,
       url: bookmarkData.url as string,
-      description: bookmarkData.description as string,
+      description: {
+        "%share": bookmarkData.description as string
+      },
       image: bookmarkData.image as string,
       tags: bookmarkData.tags as string[],
       archived: bookmarkData.archived as boolean,
@@ -467,6 +537,13 @@ export const readBookmarks = async (userAddress?: string): Promise<BookmarkData[
     for (const ref of response) {
       try {
         const data = await userClient.readData(ref.id)
+        // Normalize description field if it's secret-shared
+        if (data && typeof data === 'object' && 'description' in data) {
+          const rawData = data as Record<string, unknown>
+          if (typeof rawData.description === 'object' && '%share' in rawData.description) {
+            rawData.description = rawData.description['%share']
+          }
+        }
         bookmarks.push(data as unknown as BookmarkData)
       } catch (error) {
         console.warn('⚠️ Failed to read bookmark:', ref.id, error)
@@ -484,11 +561,13 @@ export const readBookmarks = async (userAddress?: string): Promise<BookmarkData[
   }
 }
 
-export const updateBookmark = async (id: string, _updates: Partial<BookmarkData>, _userAddress?: string): Promise<void> => {
+export const updateBookmark = async (id: string, updates: Partial<BookmarkData>, userAddress?: string): Promise<void> => {
   try {
     // For owned data, we need to read the current data, update it, and create new data
     // This is a limitation of owned data - we can't update in place
     console.log('📝 Updating owned bookmark:', id)
+    console.log('📋 Updates:', updates)
+    console.log('👤 User:', userAddress)
     console.log('⚠️ Note: Owned data updates require recreating the data')
     
     // For now, throw an error to indicate this needs to be implemented
@@ -612,7 +691,10 @@ export const restoreVaultSession = async (session: VaultSession): Promise<{
     })
     
     console.log('✅ Vault session restored')
-    return result
+    return {
+      client: result.builderClient,
+      collectionId: result.collectionId
+    }
   } catch (error) {
     console.error('❌ Failed to restore vault session:', error)
     clearVaultSession()

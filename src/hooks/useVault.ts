@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { VaultContext, BookmarkData, VaultError, VaultSession } from '@/types/secretvaults'
-import { SecretVaultBuilderClient } from '@nillion/secretvaults'
+import { SecretVaultBuilderClient, SecretVaultUserClient } from '@nillion/secretvaults'
 import {
   initializeVault,
   createBookmark,
@@ -22,7 +22,7 @@ export const useVault = (userAddress: string | null): VaultContext => {
   const [isInitializing, setIsInitializing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [session, setSession] = useState<VaultSession | null>(null)
-  const initializationRef = useRef<Promise<{ builderClient: SecretVaultBuilderClient, userClient: any, collectionId: string }> | null>(null)
+  const initializationRef = useRef<Promise<{ builderClient: SecretVaultBuilderClient, userClient: SecretVaultUserClient, collectionId: string }> | null>(null)
   const lastUserAddressRef = useRef<string | null>(null)
 
   const resetState = useCallback(() => {
@@ -55,13 +55,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
         const result = await restoreVaultSession(existingSession)
         
         if (result) {
-          setClient(result.builderClient)
+          setClient(result.client)
           setCollectionId(result.collectionId)
           setSession(existingSession)
           setIsInitialized(true)
           console.log('✅ Vault session restored for:', userAddress)
           console.log('📊 Vault state:', { 
-            hasBuilderClient: !!result.builderClient, 
+            hasBuilderClient: !!result.client, 
             collectionId: result.collectionId,
             isInitialized: true
           })

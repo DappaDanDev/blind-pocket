@@ -292,7 +292,11 @@ export default function VaultManager() {
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <h3 className="font-semibold text-gray-900">{bookmark.title}</h3>
-                    <p className="text-sm text-gray-600 mb-2">{bookmark.description}</p>
+                    <p className="text-sm text-gray-600 mb-2">
+                      {typeof bookmark.description === 'string' 
+                        ? bookmark.description 
+                        : bookmark.description["%share"] || 'No description'}
+                    </p>
                     <a
                       href={bookmark.url}
                       target="_blank"
