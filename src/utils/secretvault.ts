@@ -6,6 +6,7 @@ import {
   VaultSession, 
   VaultInitOptions, 
   VaultError, 
+  SubscriptionExpiredError,
   VAULT_SESSION_KEY, 
   VAULT_CONFIG 
 } from '@/types/secretvaults'
@@ -21,6 +22,58 @@ let initializationPromise: Promise<{ builderClient: SecretVaultBuilderClient; us
 // Use a different collection name to avoid conflicts with existing standard collection
 const OWNED_COLLECTION_NAME = 'user_bookmarks'
 
+// Helper function to detect subscription expired errors
+const isSubscriptionExpiredError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false
+  
+  // Check for direct error message
+  if ('message' in error && typeof error.message === 'string') {
+    if (error.message.toLowerCase().includes('subscription expired')) {
+      return true
+    }
+  }
+  
+  // Check for response body in network errors
+  if ('response' in error && typeof error.response === 'string') {
+    try {
+      const responseData = JSON.parse(error.response)
+      if (responseData.error_code === 'SUBSCRIPTION_EXPIRED' || 
+          (responseData.message && responseData.message.toLowerCase().includes('subscription expired'))) {
+        return true
+      }
+    } catch {
+      // If parsing fails, check string directly
+      if (error.response.toLowerCase().includes('subscription expired')) {
+        return true
+      }
+    }
+  }
+  
+  // Check for status 412 with subscription error
+  if ('status' in error && error.status === 412) {
+    return true // 412 typically indicates subscription issues in Nillion
+  }
+  
+  return false
+}
+
+// Helper function to handle subscription expired errors
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const handleSubscriptionExpiredError = (_error: unknown): never => {
+  console.error('🚫 SUBSCRIPTION EXPIRED: Builder account testnet access has expired')
+  console.error('📋 To fix this:')
+  console.error('  1. Get a new Nillion testnet builder account')
+  console.error('  2. Update NEXT_PUBLIC_NILLION_PRIVATE_KEY in your .env file')
+  console.error('  3. Clear browser storage and restart the app')
+  
+  // Clear any cached sessions since they're now invalid
+  clearVault()
+  
+  throw new SubscriptionExpiredError(
+    'Your Nillion testnet subscription has expired. Please get a new builder account and update your NEXT_PUBLIC_NILLION_PRIVATE_KEY environment variable.'
+  )
+}
+
 // Function to generate deterministic user keypair from wallet signature
 const deriveUserKeypair = async (userAddress: string): Promise<Keypair> => {
   try {
@@ -31,7 +84,7 @@ const deriveUserKeypair = async (userAddress: string): Promise<Keypair> => {
     console.log('📝 Requesting signature for deterministic keypair derivation...')
     
     // Get deterministic signature from wallet
-    const signatureData = await signArbitraryMessage(message)
+    const signatureData = await signArbitraryMessage(message, userAddress)
     console.log('✅ Signature obtained for keypair derivation')
     
     // Use the signature as seed for deterministic keypair generation
@@ -188,6 +241,12 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
       
     } catch (clientError) {
       console.error('❌ STEP 1 FAILED: SecretVault client initialization failed:', clientError)
+      
+      // Check for subscription expired error
+      if (isSubscriptionExpiredError(clientError)) {
+        handleSubscriptionExpiredError(clientError)
+      }
+      
       // Save logs for analysis
       networkLogger.saveLogs()
       throw new VaultError(
@@ -420,6 +479,11 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
   } catch (error) {
     console.error('❌ VAULT INITIALIZATION FAILED:', error)
     
+    // Check for subscription expired error
+    if (isSubscriptionExpiredError(error)) {
+      handleSubscriptionExpiredError(error)
+    }
+    
     // Save logs for analysis before throwing
     console.log('📁 Saving network logs for troubleshooting...')
     networkLogger.saveLogs()
@@ -477,11 +541,14 @@ export const createBookmark = async (bookmarkData: Omit<BookmarkData, 'id' | 'cr
     
     // Create delegation token for owned data creation
     console.log('🔑 Creating delegation token...')
+    // Helper function to convert seconds from now to absolute timestamp
+    const intoSecondsFromNow = (seconds: number) => Math.floor(Date.now() / 1000) + seconds
+    
     const delegation = NucTokenBuilder.extending(builderClient.rootToken)
-      .targeting(userClient.did)
-      .allowing(NucCmd.nil.db.data.create)
-      .expiresInSeconds(60) // 60 second expiration for security
-      .build()
+      .audience(userClient.did)
+      .command(NucCmd.nil.db.data.create)
+      .expiresAt(intoSecondsFromNow(60)) // 60 second expiration for security
+      .build(builderClient.keypair.privateKey())
     
     console.log('📋 Creating owned data with payload:', {
       owner: userClient.did.toString(),
@@ -496,11 +563,13 @@ export const createBookmark = async (bookmarkData: Omit<BookmarkData, 'id' | 'cr
     })
     
     const response = await userClient.createData(delegation, {
-      owner: userClient.did,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      owner: userClient.did.toString() as any, // SDK expects branded Did type
       collection: collectionId,
       data: [bookmark],
       acl: {
-        grantee: userClient.did,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        grantee: userClient.did.toString() as any, // SDK expects branded Did type
         read: true,
         write: true,
         execute: false
@@ -511,6 +580,12 @@ export const createBookmark = async (bookmarkData: Omit<BookmarkData, 'id' | 'cr
     return id
   } catch (error) {
     console.error('❌ Failed to create bookmark:', error)
+    
+    // Check for subscription expired error
+    if (isSubscriptionExpiredError(error)) {
+      handleSubscriptionExpiredError(error)
+    }
+    
     throw new VaultError(
       error instanceof Error ? error.message : 'Failed to create bookmark',
       'CREATE_FAILED'
@@ -526,27 +601,31 @@ export const readBookmarks = async (userAddress?: string): Promise<BookmarkData[
     console.log('📖 Reading owned bookmarks from collection:', collectionId)
     
     // For owned data, we use user client to read data
-    const response = await userClient.listDataReferences({
-      collection: collectionId
-    })
+    // listDataReferences takes no parameters
+    const response = await userClient.listDataReferences()
 
-    console.log('✅ Bookmark references retrieved:', response.length)
+    console.log('✅ Bookmark references retrieved:', response.data.length)
     
     // Read the actual data for each reference
     const bookmarks: BookmarkData[] = []
-    for (const ref of response) {
+    for (const ref of response.data) {
       try {
-        const data = await userClient.readData(ref.id)
+        const result = await userClient.readData({
+          collection: collectionId,
+          document: ref.document
+        })
+        // Extract the actual data from the response
+        const data = result.data
         // Normalize description field if it's secret-shared
         if (data && typeof data === 'object' && 'description' in data) {
           const rawData = data as Record<string, unknown>
-          if (typeof rawData.description === 'object' && '%share' in rawData.description) {
+          if (rawData.description && typeof rawData.description === 'object' && '%share' in rawData.description) {
             rawData.description = rawData.description['%share']
           }
         }
         bookmarks.push(data as unknown as BookmarkData)
       } catch (error) {
-        console.warn('⚠️ Failed to read bookmark:', ref.id, error)
+        console.warn('⚠️ Failed to read bookmark:', ref.document, error)
       }
     }
     
@@ -554,6 +633,12 @@ export const readBookmarks = async (userAddress?: string): Promise<BookmarkData[
     return bookmarks
   } catch (error) {
     console.error('❌ Failed to read bookmarks:', error)
+    
+    // Check for subscription expired error
+    if (isSubscriptionExpiredError(error)) {
+      handleSubscriptionExpiredError(error)
+    }
+    
     throw new VaultError(
       error instanceof Error ? error.message : 'Failed to read bookmarks',
       'READ_FAILED'
@@ -590,25 +675,33 @@ export const deleteBookmark = async (id: string, userAddress?: string): Promise<
     
     // For owned data, we delete by data ID (not application ID)
     // First find the data reference by application ID
-    const references = await userClient.listDataReferences({
-      collection: collectionId
-    })
+    // listDataReferences takes no parameters
+    const references = await userClient.listDataReferences()
     
-    const targetRef = references.find(ref => {
+    const targetRef = references.data.find((ref: { document: string }) => {
       // We need to check if this reference contains our bookmark ID
       // This is a limitation - we might need to read each one to find the right one
-      return ref.id === id || ref.name === id
+      return ref.document === id
     })
     
     if (!targetRef) {
       throw new VaultError(`Bookmark with id ${id} not found`, 'BOOKMARK_NOT_FOUND')
     }
     
-    await userClient.deleteData(targetRef.id)
+    await userClient.deleteData({
+      collection: collectionId,
+      document: targetRef.document
+    })
 
     console.log('✅ Owned bookmark deleted')
   } catch (error) {
     console.error('❌ Failed to delete bookmark:', error)
+    
+    // Check for subscription expired error
+    if (isSubscriptionExpiredError(error)) {
+      handleSubscriptionExpiredError(error)
+    }
+    
     throw new VaultError(
       error instanceof Error ? error.message : 'Failed to delete bookmark',
       'DELETE_FAILED'
@@ -697,6 +790,12 @@ export const restoreVaultSession = async (session: VaultSession): Promise<{
     }
   } catch (error) {
     console.error('❌ Failed to restore vault session:', error)
+    
+    // Check for subscription expired error
+    if (isSubscriptionExpiredError(error)) {
+      handleSubscriptionExpiredError(error)
+    }
+    
     clearVaultSession()
     return null
   }

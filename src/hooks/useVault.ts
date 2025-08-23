@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { VaultContext, BookmarkData, VaultError, VaultSession } from '@/types/secretvaults'
+import { VaultContext, BookmarkData, VaultError, SubscriptionExpiredError, VaultSession } from '@/types/secretvaults'
 import { SecretVaultBuilderClient, SecretVaultUserClient } from '@nillion/secretvaults'
 import {
   initializeVault,
@@ -139,16 +139,21 @@ export const useVault = (userAddress: string | null): VaultContext => {
         
         console.log('✅ Vault initialized successfully for:', address)
         console.log('📊 Final vault state:', { 
-          hasClient: !!result.client, 
+          hasBuilderClient: !!result.builderClient,
+          hasUserClient: !!result.userClient,
           collectionId: result.collectionId,
           isInitialized: true
         })
         
         return result
       } catch (error) {
-        const errorMessage = error instanceof VaultError 
-          ? error.message 
-          : 'Failed to initialize vault'
+        let errorMessage = 'Failed to initialize vault'
+        
+        if (error instanceof SubscriptionExpiredError) {
+          errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired. Please get a new builder account and update your environment variables.'
+        } else if (error instanceof VaultError) {
+          errorMessage = error.message
+        }
         
         console.error('❌ Vault initialization failed:', error)
         setClient(null)
@@ -174,9 +179,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       console.log('✅ Bookmark created with ID:', id)
       return id
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to create bookmark'
+      let errorMessage = 'Failed to create bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to create bookmark:', error)
       throw new Error(errorMessage)
@@ -190,9 +199,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       console.log('✅ Retrieved bookmarks:', bookmarks.length)
       return bookmarks
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to read bookmarks'
+      let errorMessage = 'Failed to read bookmarks'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to read bookmarks:', error)
       throw new Error(errorMessage)
@@ -205,9 +218,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       await updateBookmark(id, updates, userAddress || undefined)
       console.log('✅ Bookmark updated')
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to update bookmark'
+      let errorMessage = 'Failed to update bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to update bookmark:', error)
       throw new Error(errorMessage)
@@ -220,9 +237,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       await deleteBookmark(id, userAddress || undefined)
       console.log('✅ Bookmark deleted')
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to delete bookmark'
+      let errorMessage = 'Failed to delete bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to delete bookmark:', error)
       throw new Error(errorMessage)

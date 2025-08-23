@@ -55,6 +55,13 @@ export class VaultError extends Error {
   }
 }
 
+export class SubscriptionExpiredError extends VaultError {
+  constructor(message = 'Your Nillion testnet subscription has expired. Please get a new builder account.') {
+    super(message, 'SUBSCRIPTION_EXPIRED')
+    this.name = 'SubscriptionExpiredError'
+  }
+}
+
 export const VAULT_SESSION_KEY = 'secretvault_session'
 export const COLLECTION_NAME = 'bookmarks'
 
