@@ -20,6 +20,7 @@ import { signArbitraryMessage } from "./keplr-auth";
 let builderClient: SecretVaultBuilderClient | null = null;
 let userClient: SecretVaultUserClient | null = null;
 let currentCollectionId: string | null = null;
+let builderKeypair: Keypair | null = null;
 let initializationPromise: Promise<{
   builderClient: SecretVaultBuilderClient;
   userClient: SecretVaultUserClient;
@@ -136,14 +137,15 @@ export const initializeVault = async (
           [],
       );
 
-      const builderKeypair = Keypair.from(privateKeyBytes);
+      const keypair = Keypair.from(privateKeyBytes);
+      builderKeypair = keypair;
 
       // Initialize SecretVault clients (both builder and user)
       console.log("🔄 STEP 1: Initializing SecretVault builder client...");
       let builder, user;
       try {
         const clientConfig = {
-          keypair: builderKeypair,
+          keypair: keypair,
           urls: {
             chain: options.chainUrl || config.chainUrl,
             auth: options.authUrl || config.authUrl,
@@ -202,47 +204,31 @@ export const initializeVault = async (
       try {
         console.log("🔄 STEP 3: Registering builder...");
         const registerPayload = {
-          did: builder.did.toString(), // Convert DID object to string using SDK's toString() method
+          did: builder.did.toString() as any, // Convert DID object to string and cast
           name: `BookmarkVault_${options.userAddress.slice(0, 8)}`,
         };
         console.log("📋 Register payload:", registerPayload);
 
-        const registerResult = await builder.register(
-          registerPayload as unknown as Parameters<typeof builder.register>[0],
-        );
+        const registerResult = await builder.register(registerPayload);
         console.log("✅ STEP 3 COMPLETE: Builder registered");
         console.log("📊 Register result:", registerResult);
       } catch (error) {
-        // Check if it's a duplicate key error (expected when builder already exists)
-        let isDuplicateKeyError = false;
+        console.log("⚠️ STEP 3: Registration error occurred:", error);
 
-        if (error instanceof Error && error.message.includes("duplicate key")) {
-          isDuplicateKeyError = true;
-        } else if (
-          error &&
-          typeof error === "object" &&
-          "errors" in error &&
-          Array.isArray(error.errors)
-        ) {
-          // Check if any error in the array mentions duplicate key
-          isDuplicateKeyError = error.errors.some(
-            (e) =>
-              (typeof e === "string" && e.includes("duplicate key")) ||
-              (typeof e === "object" &&
-                JSON.stringify(e).includes("duplicate key")),
+        // Try to read the builder profile to check if already registered
+        try {
+          console.log("🔄 Checking if builder already exists...");
+          const profile = await builder.readProfile();
+          console.log("✅ STEP 3 COMPLETE: Builder already exists:", profile);
+        } catch (profileError) {
+          console.error(
+            "❌ STEP 3 FAILED: Builder not registered and registration failed",
+          );
+          throw new VaultError(
+            "Failed to register builder - cannot proceed without registration",
+            "BUILDER_REGISTRATION_FAILED",
           );
         }
-
-        if (isDuplicateKeyError) {
-          console.log(
-            "✅ STEP 3 COMPLETE: Builder already registered (as expected)",
-          );
-        } else {
-          console.log("⚠️ STEP 3 WARNING: Builder registration failed:", error);
-          console.log("⚠️ Error type:", typeof error);
-          console.log("⚠️ Error details:", JSON.stringify(error, null, 2));
-        }
-        // Continue anyway - builder registration errors are often expected
       }
 
       // Set up collection for bookmarks
@@ -334,9 +320,7 @@ export const initializeVault = async (
                   description: {
                     type: "object",
                     properties: {
-                      "%share": {
-                        type: "string",
-                      },
+                      "%share": { type: "string" },
                     },
                     required: ["%share"],
                   },
@@ -487,6 +471,7 @@ export const initializeVault = async (
       builderClient = null;
       userClient = null;
       currentCollectionId = null;
+      builderKeypair = null;
 
       // Don't re-wrap VaultError instances
       if (error instanceof VaultError) {
@@ -520,19 +505,26 @@ export const createBookmark = async (
     const { builderClient, userClient, collectionId } =
       await ensureVaultInitialized(userAddress);
 
+    // Ensure builder has a fresh root token
+    console.log("🔄 Refreshing builder root token...");
+    await builderClient.refreshRootToken();
+    console.log("✅ Root token refreshed");
+
     const id = uuidv4();
     const bookmark = {
       _id: uuidv4(), // Required by SDK for all records
       id,
-      title: bookmarkData.title as string,
-      url: bookmarkData.url as string,
+      title: bookmarkData.title || "",
+      url: bookmarkData.url || "",
       description: {
-        "%share": bookmarkData.description as string,
+        "%share": (bookmarkData.description !== undefined && bookmarkData.description !== null) 
+          ? String(bookmarkData.description) 
+          : "",
       },
-      image: bookmarkData.image as string,
-      tags: bookmarkData.tags as string[],
-      archived: bookmarkData.archived as boolean,
-      favorite: bookmarkData.favorite as boolean,
+      image: bookmarkData.image || "",
+      tags: bookmarkData.tags || [],
+      archived: bookmarkData.archived || false,
+      favorite: bookmarkData.favorite || false,
       created_at: new Date().toISOString(),
     };
 
@@ -540,11 +532,15 @@ export const createBookmark = async (
 
     // Create delegation token for owned data creation
     console.log("🔑 Creating delegation token...");
+    console.log("📋 Builder DID:", builderClient.did.toString());
+    console.log("📋 User DID:", userClient.did.toString());
+
+    // Create delegation from builder to user for data creation
     const delegation = NucTokenBuilder.extending(builderClient.rootToken)
-      .targeting(userClient.did)
-      .allowing(NucCmd.nil.db.data.create)
-      .expiresInSeconds(60) // 60 second expiration for security
-      .build();
+      .command(NucCmd.nil.db.data.create)
+      .audience(userClient.did)
+      .expiresAt(Math.floor(Date.now() / 1000) + 60) // 60 second expiration
+      .build(builderKeypair!.privateKey());
 
     console.log("📋 Creating owned data with payload:", {
       owner: userClient.did.toString(),
@@ -561,13 +557,13 @@ export const createBookmark = async (
     //test
 
     const response = await userClient.createData(delegation, {
-      owner: userClient.did,
+      owner: userClient.did.toString() as any,
       collection: collectionId,
       data: [bookmark],
       acl: {
-        grantee: userClient.did,
+        grantee: builderClient.did.toString() as any, // Builder gets access to read user's data
         read: true,
-        write: true,
+        write: false,
         execute: false,
       },
     });
@@ -594,30 +590,30 @@ export const readBookmarks = async (
     console.log("📖 Reading owned bookmarks from collection:", collectionId);
 
     // For owned data, we use user client to read data
-    const response = await userClient.listDataReferences({
-      collection: collectionId,
-    });
+    const response = await userClient.listDataReferences();
 
-    console.log("✅ Bookmark references retrieved:", response.length);
+    console.log("✅ Bookmark references retrieved:", response.data.length);
 
     // Read the actual data for each reference
     const bookmarks: BookmarkData[] = [];
-    for (const ref of response) {
+    for (const ref of response.data) {
       try {
-        const data = await userClient.readData(ref.id);
-        // Normalize description field if it's secret-shared
-        if (data && typeof data === "object" && "description" in data) {
-          const rawData = data as any;
-          if (
-            typeof rawData.description === "object" &&
-            "%share" in rawData.description
-          ) {
-            rawData.description = rawData.description["%share"];
-          }
-        }
-        bookmarks.push(data as unknown as BookmarkData);
+        const response = await userClient.readData({
+          collection: ref.collection,
+          document: ref.document,
+        });
+        // Extract the actual data from the response
+        const rawData = (response as any).data || response;
+        // Normalize description field from object to string
+        const normalizedData = {
+          ...rawData,
+          description: (rawData.description && typeof rawData.description === 'object' && '%share' in rawData.description)
+            ? rawData.description['%share'] 
+            : (rawData.description || ""),
+        };
+        bookmarks.push(normalizedData as BookmarkData);
       } catch (error) {
-        console.warn("⚠️ Failed to read bookmark:", ref.id, error);
+        console.warn("⚠️ Failed to read bookmark:", ref.document, error);
       }
     }
 
@@ -670,14 +666,12 @@ export const deleteBookmark = async (
 
     // For owned data, we delete by data ID (not application ID)
     // First find the data reference by application ID
-    const references = await userClient.listDataReferences({
-      collection: collectionId,
-    });
+    const references = await userClient.listDataReferences();
 
-    const targetRef = references.find((ref) => {
+    const targetRef = references.data.find((ref) => {
       // We need to check if this reference contains our bookmark ID
       // This is a limitation - we might need to read each one to find the right one
-      return ref.id === id || ref.name === id;
+      return ref.document === id || ref.collection === id;
     });
 
     if (!targetRef) {
@@ -687,7 +681,10 @@ export const deleteBookmark = async (
       );
     }
 
-    await userClient.deleteData(targetRef.id);
+    await userClient.deleteData({
+      collection: targetRef.collection,
+      document: targetRef.document,
+    });
 
     console.log("✅ Owned bookmark deleted");
   } catch (error) {
@@ -742,6 +739,7 @@ export const clearVault = (): void => {
   builderClient = null;
   userClient = null;
   currentCollectionId = null;
+  builderKeypair = null;
   clearVaultSession();
   console.log("🧹 Vault cleared");
 };
@@ -759,7 +757,8 @@ export const isVaultSessionValid = (session: VaultSession | null): boolean => {
 export const restoreVaultSession = async (
   session: VaultSession,
 ): Promise<{
-  client: SecretVaultBuilderClient;
+  builderClient: SecretVaultBuilderClient;
+  userClient: SecretVaultUserClient;
   collectionId: string;
 } | null> => {
   if (!isVaultSessionValid(session)) {
