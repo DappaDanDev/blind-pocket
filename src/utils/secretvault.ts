@@ -340,12 +340,10 @@ export const initializeVault = async (options: VaultInitOptions): Promise<{
         
         const newCollectionId = uuidv4()
         // Using proper JSON Schema format as per Nillion docs
-        // Adding owner field for owned collections (might be required despite DTO)
         const collection = {
           _id: newCollectionId,
           type: "owned" as const,
           name: OWNED_COLLECTION_NAME,
-          owner: user.did.toString(), // Required for owned collections
           schema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
             type: 'array',
