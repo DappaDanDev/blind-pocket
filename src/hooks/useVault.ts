@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { VaultContext, BookmarkData, VaultError, VaultSession } from '@/types/secretvaults'
-import { SecretVaultBuilderClient } from '@nillion/secretvaults'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { VaultContext, BookmarkData, VaultError, SubscriptionExpiredError, VaultSession } from '@/types/secretvaults'
+import { SecretVaultBuilderClient, SecretVaultUserClient } from '@nillion/secretvaults'
 import {
   initializeVault,
   createBookmark,
@@ -22,6 +22,8 @@ export const useVault = (userAddress: string | null): VaultContext => {
   const [isInitializing, setIsInitializing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [session, setSession] = useState<VaultSession | null>(null)
+  const initializationRef = useRef<Promise<{ builderClient: SecretVaultBuilderClient, userClient: SecretVaultUserClient, collectionId: string }> | null>(null)
+  const lastUserAddressRef = useRef<string | null>(null)
 
   const resetState = useCallback(() => {
     setClient(null)
@@ -29,10 +31,18 @@ export const useVault = (userAddress: string | null): VaultContext => {
     setIsInitialized(false)
     setSession(null)
     setError(null)
+    initializationRef.current = null
+    lastUserAddressRef.current = null
   }, [])
 
   const checkExistingSession = useCallback(async () => {
     if (typeof window === 'undefined' || !userAddress) return
+    
+    // Prevent multiple session checks for the same user
+    if (lastUserAddressRef.current === userAddress && (isInitialized || isInitializing)) {
+      console.log('🔍 Session check skipped - already processed for:', userAddress)
+      return
+    }
     
     console.log('🔍 Checking for existing vault session for:', userAddress)
     const existingSession = loadVaultSession()
@@ -40,6 +50,7 @@ export const useVault = (userAddress: string | null): VaultContext => {
     if (existingSession && isVaultSessionValid(existingSession) && existingSession.userAddress === userAddress) {
       try {
         setIsInitializing(true)
+        lastUserAddressRef.current = userAddress
         console.log('🔄 Restoring vault session...')
         const result = await restoreVaultSession(existingSession)
         
@@ -50,7 +61,7 @@ export const useVault = (userAddress: string | null): VaultContext => {
           setIsInitialized(true)
           console.log('✅ Vault session restored for:', userAddress)
           console.log('📊 Vault state:', { 
-            hasClient: !!result.client, 
+            hasBuilderClient: !!result.client, 
             collectionId: result.collectionId,
             isInitialized: true
           })
@@ -68,7 +79,7 @@ export const useVault = (userAddress: string | null): VaultContext => {
       console.log('⚠️ Invalid or mismatched vault session, clearing')
       clearVault()
     }
-  }, [userAddress, resetState])
+  }, [userAddress, resetState, isInitialized, isInitializing])
 
   useEffect(() => {
     if (!userAddress) {
@@ -76,67 +87,89 @@ export const useVault = (userAddress: string | null): VaultContext => {
       return
     }
 
-    checkExistingSession()
-  }, [userAddress, checkExistingSession, resetState])
+    // Only check existing session if not already initialized or initializing
+    if (!isInitialized && !isInitializing) {
+      checkExistingSession()
+    }
+  }, [userAddress, checkExistingSession, isInitialized, isInitializing, resetState])
 
   const initialize = useCallback(async (address: string) => {
-    if (isInitializing) {
+    // Prevent multiple initializations
+    if (isInitializing || initializationRef.current) {
       console.log('⚠️ Vault initialization already in progress, skipping')
-      return
+      return initializationRef.current
     }
     
-    setIsInitializing(true)
-    setError(null)
+    // Create a promise to track this initialization
+    const initPromise = (async () => {
+      setIsInitializing(true)
+      setError(null)
+      lastUserAddressRef.current = address
+      
+      try {
+        console.log('🚀 Initializing vault for:', address)
+        console.log('📱 Current state before init:', { 
+          hasClient: !!client, 
+          hasCollectionId: !!collectionId,
+          isInitialized,
+          isInitializing: true
+        })
+        
+        const result = await initializeVault({
+          userAddress: address
+        })
+        
+        console.log('🔧 Vault initialization result:', {
+          hasBuilderClient: !!result.builderClient,
+          hasUserClient: !!result.userClient,
+          collectionId: result.collectionId,
+          builderClientType: result.builderClient?.constructor?.name,
+          userClientType: result.userClient?.constructor?.name
+        })
+        
+        setClient(result.builderClient)
+        setCollectionId(result.collectionId)
+        setSession({
+          userAddress: address,
+          collectionId: result.collectionId,
+          initialized: true,
+          timestamp: Date.now()
+        })
+        setIsInitialized(true)
+        
+        console.log('✅ Vault initialized successfully for:', address)
+        console.log('📊 Final vault state:', { 
+          hasBuilderClient: !!result.builderClient,
+          hasUserClient: !!result.userClient,
+          collectionId: result.collectionId,
+          isInitialized: true
+        })
+        
+        return result
+      } catch (error) {
+        let errorMessage = 'Failed to initialize vault'
+        
+        if (error instanceof SubscriptionExpiredError) {
+          errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired. Please get a new builder account and update your environment variables.'
+        } else if (error instanceof VaultError) {
+          errorMessage = error.message
+        }
+        
+        console.error('❌ Vault initialization failed:', error)
+        setClient(null)
+        setCollectionId(null)
+        setIsInitialized(false)
+        setSession(null)
+        setError(errorMessage)
+        throw error
+      } finally {
+        setIsInitializing(false)
+        initializationRef.current = null
+      }
+    })()
     
-    try {
-      console.log('🚀 Initializing vault for:', address)
-      console.log('📱 Current state before init:', { 
-        hasClient: !!client, 
-        hasCollectionId: !!collectionId,
-        isInitialized,
-        isInitializing: true
-      })
-      
-      const result = await initializeVault({
-        userAddress: address
-      })
-      
-      console.log('🔧 Vault initialization result:', {
-        hasClient: !!result.client,
-        collectionId: result.collectionId,
-        clientType: result.client?.constructor?.name
-      })
-      
-      setClient(result.client)
-      setCollectionId(result.collectionId)
-      setSession({
-        userAddress: address,
-        collectionId: result.collectionId,
-        initialized: true,
-        timestamp: Date.now()
-      })
-      setIsInitialized(true)
-      
-      console.log('✅ Vault initialized successfully for:', address)
-      console.log('📊 Final vault state:', { 
-        hasClient: !!result.client, 
-        collectionId: result.collectionId,
-        isInitialized: true
-      })
-    } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to initialize vault'
-      
-      console.error('❌ Vault initialization failed:', error)
-      setClient(null)
-      setCollectionId(null)
-      setIsInitialized(false)
-      setSession(null)
-      setError(errorMessage)
-    } finally {
-      setIsInitializing(false)
-    }
+    initializationRef.current = initPromise
+    return initPromise
   }, [isInitializing, client, collectionId, isInitialized])
 
   const createBookmarkFn = useCallback(async (bookmarkData: Omit<BookmarkData, 'id' | 'created_at'>) => {
@@ -146,9 +179,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       console.log('✅ Bookmark created with ID:', id)
       return id
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to create bookmark'
+      let errorMessage = 'Failed to create bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to create bookmark:', error)
       throw new Error(errorMessage)
@@ -162,9 +199,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       console.log('✅ Retrieved bookmarks:', bookmarks.length)
       return bookmarks
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to read bookmarks'
+      let errorMessage = 'Failed to read bookmarks'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to read bookmarks:', error)
       throw new Error(errorMessage)
@@ -177,9 +218,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       await updateBookmark(id, updates, userAddress || undefined)
       console.log('✅ Bookmark updated')
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to update bookmark'
+      let errorMessage = 'Failed to update bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to update bookmark:', error)
       throw new Error(errorMessage)
@@ -192,9 +237,13 @@ export const useVault = (userAddress: string | null): VaultContext => {
       await deleteBookmark(id, userAddress || undefined)
       console.log('✅ Bookmark deleted')
     } catch (error) {
-      const errorMessage = error instanceof VaultError 
-        ? error.message 
-        : 'Failed to delete bookmark'
+      let errorMessage = 'Failed to delete bookmark'
+      
+      if (error instanceof SubscriptionExpiredError) {
+        errorMessage = '🚫 Subscription Expired: Your Nillion testnet access has expired'
+      } else if (error instanceof VaultError) {
+        errorMessage = error.message
+      }
       
       console.error('❌ Failed to delete bookmark:', error)
       throw new Error(errorMessage)
@@ -215,7 +264,7 @@ export const useVault = (userAddress: string | null): VaultContext => {
     isInitializing,
     error,
     session,
-    initialize,
+    initialize: initialize as unknown as (userAddress: string) => Promise<void>,
     createBookmark: createBookmarkFn,
     readBookmarks: readBookmarksFn,
     updateBookmark: updateBookmarkFn,

@@ -2,7 +2,7 @@
 
 import { useWallet } from '@/hooks/useWallet'
 import { useVault } from '@/hooks/useVault'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { BookmarkData } from '@/types/secretvaults'
 
 export default function VaultManager() {
@@ -18,6 +18,8 @@ export default function VaultManager() {
     updateBookmark,
     deleteBookmark
   } = useVault(walletInfo?.address || null)
+  const autoInitTriggeredRef = useRef(false)
+  const lastWalletAddressRef = useRef<string | null>(null)
 
   // Debug logging
   console.log('🔍 VaultManager Debug:', {
@@ -54,8 +56,15 @@ export default function VaultManager() {
   }, [])
 
   useEffect(() => {
-    if (isConnected && walletInfo?.address && !isInitialized && !isInitializing) {
+    // Reset auto-init flag when wallet changes
+    if (lastWalletAddressRef.current !== walletInfo?.address) {
+      autoInitTriggeredRef.current = false
+      lastWalletAddressRef.current = walletInfo?.address || null
+    }
+    
+    if (isConnected && walletInfo?.address && !isInitialized && !isInitializing && !autoInitTriggeredRef.current) {
       console.log('🚀 Auto-initializing vault for connected wallet')
+      autoInitTriggeredRef.current = true
       initialize(walletInfo.address)
     }
   }, [isConnected, walletInfo?.address, isInitialized, isInitializing, initialize])
@@ -283,7 +292,11 @@ export default function VaultManager() {
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <h3 className="font-semibold text-gray-900">{bookmark.title}</h3>
-                    <p className="text-sm text-gray-600 mb-2">{bookmark.description}</p>
+                    <p className="text-sm text-gray-600 mb-2">
+                      {typeof bookmark.description === 'string' 
+                        ? bookmark.description 
+                        : bookmark.description["%share"] || 'No description'}
+                    </p>
                     <a
                       href={bookmark.url}
                       target="_blank"
