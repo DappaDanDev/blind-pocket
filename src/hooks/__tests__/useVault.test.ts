@@ -1,8 +1,9 @@
 import { renderHook, act } from '@testing-library/react'
 import { useVault } from '../useVault'
 import * as secretvault from '@/utils/secretvault'
-import { VaultError } from '@/types/secretvaults'
-import { SecretVaultBuilderClient } from '@nillion/secretvaults'
+import { BookmarkData, VaultError } from '@/types/secretvaults'
+import { SecretVaultUserClient } from '@nillion/secretvaults'
+import { VaultInitializationResult } from '@/utils/secretvault'
 
 // Mock the secretvault module
 jest.mock('@/utils/secretvault', () => ({
@@ -21,19 +22,27 @@ const mockSecretVault = secretvault as jest.Mocked<typeof secretvault>
 
 describe('useVault Hook', () => {
   const mockUserAddress = 'cosmos1test123'
-  const mockClient = { did: 'did:test:123' } as unknown as SecretVaultBuilderClient
+  const mockBuilderDid = 'did:test:123'
+  const mockUserClient = { did: 'did:user:456' } as unknown as SecretVaultUserClient
   const mockCollectionId = 'test-collection-123'
+
+  const mockInitializationResult: VaultInitializationResult = {
+    builderDid: mockBuilderDid,
+    userClient: mockUserClient,
+    collectionId: mockCollectionId
+  }
 
   const mockSession = {
     userAddress: mockUserAddress,
     collectionId: mockCollectionId,
+    builderDid: mockBuilderDid,
     initialized: true,
     timestamp: Date.now(),
   }
 
   beforeEach(() => {
     jest.clearAllMocks()
-    
+
     // Default mock implementations
     mockSecretVault.loadVaultSession.mockReturnValue(null)
     mockSecretVault.isVaultSessionValid.mockReturnValue(false)
@@ -42,8 +51,8 @@ describe('useVault Hook', () => {
   describe('initialization', () => {
     it('should initialize with default values', () => {
       const { result } = renderHook(() => useVault(null))
-      
-      expect(result.current.client).toBeNull()
+
+      expect(result.current.builderDid).toBeNull()
       expect(result.current.collectionId).toBeNull()
       expect(result.current.isInitialized).toBe(false)
       expect(result.current.isInitializing).toBe(false)
@@ -54,10 +63,7 @@ describe('useVault Hook', () => {
     it('should restore existing valid session on mount', async () => {
       mockSecretVault.loadVaultSession.mockReturnValue(mockSession)
       mockSecretVault.isVaultSessionValid.mockReturnValue(true)
-      mockSecretVault.restoreVaultSession.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.restoreVaultSession.mockResolvedValue(mockInitializationResult)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
 
@@ -67,7 +73,7 @@ describe('useVault Hook', () => {
       })
 
       expect(result.current.isInitialized).toBe(true)
-      expect(result.current.client).toEqual(mockClient)
+      expect(result.current.builderDid).toEqual(mockBuilderDid)
       expect(result.current.collectionId).toBe(mockCollectionId)
       expect(result.current.session).toEqual(mockSession)
     })
@@ -87,7 +93,9 @@ describe('useVault Hook', () => {
     })
 
     it('should handle session restoration failure', async () => {
-      mockSecretVault.loadVaultSession.mockReturnValue(mockSession)
+      mockSecretVault.loadVaultSession
+        .mockReturnValueOnce(mockSession)
+        .mockReturnValue(null)
       mockSecretVault.isVaultSessionValid.mockReturnValue(true)
       mockSecretVault.restoreVaultSession.mockResolvedValue(null)
 
@@ -98,16 +106,13 @@ describe('useVault Hook', () => {
       })
 
       expect(result.current.isInitialized).toBe(false)
-      expect(result.current.client).toBeNull()
+      expect(result.current.builderDid).toBeNull()
     })
   })
 
   describe('initialize function', () => {
     it('should successfully initialize vault', async () => {
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
 
@@ -116,7 +121,7 @@ describe('useVault Hook', () => {
       })
 
       expect(result.current.isInitialized).toBe(true)
-      expect(result.current.client).toEqual(mockClient)
+      expect(result.current.builderDid).toEqual(mockBuilderDid)
       expect(result.current.collectionId).toBe(mockCollectionId)
       expect(result.current.error).toBeNull()
       expect(mockSecretVault.initializeVault).toHaveBeenCalledWith({
@@ -125,9 +130,10 @@ describe('useVault Hook', () => {
     })
 
     it('should set initializing state during initialization', async () => {
-      mockSecretVault.initializeVault.mockImplementation(() => 
+      mockSecretVault.initializeVault.mockImplementation(() =>
         new Promise(resolve => setTimeout(() => resolve({
-          client: mockClient,
+          builderDid: mockBuilderDid,
+          userClient: mockUserClient,
           collectionId: mockCollectionId
         }), 100))
       )
@@ -167,12 +173,12 @@ describe('useVault Hook', () => {
     })
 
     it('should not initialize if already initializing', async () => {
-      let resolvePromise: (value: { client: unknown; collectionId: string }) => void
+      let resolvePromise: (value: VaultInitializationResult) => void
       const initPromise = new Promise(resolve => {
         resolvePromise = resolve
       })
-      
-      mockSecretVault.initializeVault.mockReturnValue(initPromise as Promise<{ client: SecretVaultBuilderClient; collectionId: string }>)
+
+      mockSecretVault.initializeVault.mockReturnValue(initPromise as Promise<VaultInitializationResult>)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
 
@@ -191,7 +197,8 @@ describe('useVault Hook', () => {
       // Complete the promise
       await act(async () => {
         resolvePromise({
-          client: mockClient,
+          builderDid: mockBuilderDid,
+          userClient: mockUserClient,
           collectionId: mockCollectionId
         })
         await initPromise
@@ -201,10 +208,7 @@ describe('useVault Hook', () => {
 
   describe('createBookmark function', () => {
     it('should create bookmark when initialized', async () => {
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
       mockSecretVault.createBookmark.mockResolvedValue('bookmark-id-123')
 
       const { result } = renderHook(() => useVault(mockUserAddress))
@@ -229,10 +233,14 @@ describe('useVault Hook', () => {
       })
 
       expect(bookmarkId!).toBe('bookmark-id-123')
-      expect(mockSecretVault.createBookmark).toHaveBeenCalledWith(bookmarkData)
+      expect(mockSecretVault.createBookmark).toHaveBeenCalledWith(
+        bookmarkData,
+        mockUserAddress
+      )
     })
 
     it('should throw error when not initialized', async () => {
+      mockSecretVault.createBookmark.mockRejectedValue(new Error('Vault not initialized'))
       const { result } = renderHook(() => useVault(mockUserAddress))
 
       await expect(result.current.createBookmark({
@@ -249,8 +257,9 @@ describe('useVault Hook', () => {
 
   describe('readBookmarks function', () => {
     it('should read bookmarks when initialized', async () => {
-      const mockBookmarks = [
+      const mockBookmarks: BookmarkData[] = [
         {
+          _id: 'sdk-record-1',
           id: '1',
           title: 'Test Bookmark',
           url: 'https://example.com',
@@ -263,10 +272,7 @@ describe('useVault Hook', () => {
         }
       ]
 
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
       mockSecretVault.readBookmarks.mockResolvedValue(mockBookmarks)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
@@ -275,16 +281,17 @@ describe('useVault Hook', () => {
         await result.current.initialize(mockUserAddress)
       })
 
-      let bookmarks: typeof mockBookmarks
+      let bookmarks: BookmarkData[]
       await act(async () => {
         bookmarks = await result.current.readBookmarks()
       })
 
       expect(bookmarks!).toEqual(mockBookmarks)
-      expect(mockSecretVault.readBookmarks).toHaveBeenCalled()
+      expect(mockSecretVault.readBookmarks).toHaveBeenCalledWith(mockUserAddress)
     })
 
     it('should throw error when not initialized', async () => {
+      mockSecretVault.readBookmarks.mockRejectedValue(new Error('Vault not initialized'))
       const { result } = renderHook(() => useVault(mockUserAddress))
 
       await expect(result.current.readBookmarks()).rejects.toThrow('Vault not initialized')
@@ -293,10 +300,7 @@ describe('useVault Hook', () => {
 
   describe('updateBookmark function', () => {
     it('should update bookmark when initialized', async () => {
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
       mockSecretVault.updateBookmark.mockResolvedValue(undefined)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
@@ -309,10 +313,15 @@ describe('useVault Hook', () => {
         await result.current.updateBookmark('bookmark-id', { title: 'Updated Title' })
       })
 
-      expect(mockSecretVault.updateBookmark).toHaveBeenCalledWith('bookmark-id', { title: 'Updated Title' })
+      expect(mockSecretVault.updateBookmark).toHaveBeenCalledWith(
+        'bookmark-id',
+        { title: 'Updated Title' },
+        mockUserAddress
+      )
     })
 
     it('should throw error when not initialized', async () => {
+      mockSecretVault.updateBookmark.mockRejectedValue(new Error('Vault not initialized'))
       const { result } = renderHook(() => useVault(mockUserAddress))
 
       await expect(result.current.updateBookmark('id', { title: 'Updated' })).rejects.toThrow('Vault not initialized')
@@ -321,10 +330,7 @@ describe('useVault Hook', () => {
 
   describe('deleteBookmark function', () => {
     it('should delete bookmark when initialized', async () => {
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
       mockSecretVault.deleteBookmark.mockResolvedValue(undefined)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
@@ -337,10 +343,11 @@ describe('useVault Hook', () => {
         await result.current.deleteBookmark('bookmark-id')
       })
 
-      expect(mockSecretVault.deleteBookmark).toHaveBeenCalledWith('bookmark-id')
+      expect(mockSecretVault.deleteBookmark).toHaveBeenCalledWith('bookmark-id', mockUserAddress)
     })
 
     it('should throw error when not initialized', async () => {
+      mockSecretVault.deleteBookmark.mockRejectedValue(new Error('Vault not initialized'))
       const { result } = renderHook(() => useVault(mockUserAddress))
 
       await expect(result.current.deleteBookmark('id')).rejects.toThrow('Vault not initialized')
@@ -349,10 +356,7 @@ describe('useVault Hook', () => {
 
   describe('clearVault function', () => {
     it('should clear vault and reset state', async () => {
-      mockSecretVault.initializeVault.mockResolvedValue({
-        client: mockClient,
-        collectionId: mockCollectionId
-      })
+      mockSecretVault.initializeVault.mockResolvedValue(mockInitializationResult)
 
       const { result } = renderHook(() => useVault(mockUserAddress))
 
@@ -367,7 +371,7 @@ describe('useVault Hook', () => {
       })
 
       expect(result.current.isInitialized).toBe(false)
-      expect(result.current.client).toBeNull()
+      expect(result.current.builderDid).toBeNull()
       expect(result.current.collectionId).toBeNull()
       expect(result.current.session).toBeNull()
       expect(mockSecretVault.clearVault).toHaveBeenCalled()
@@ -383,7 +387,7 @@ describe('useVault Hook', () => {
 
       rerender({ userAddress: null })
 
-      expect(result.current.client).toBeNull()
+      expect(result.current.builderDid).toBeNull()
       expect(result.current.collectionId).toBeNull()
       expect(result.current.isInitialized).toBe(false)
       expect(result.current.session).toBeNull()

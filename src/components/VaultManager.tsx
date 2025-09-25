@@ -4,19 +4,24 @@ import { useWallet } from '@/hooks/useWallet'
 import { useVault } from '@/hooks/useVault'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { BookmarkData } from '@/types/secretvaults'
+import { networkLogger } from '@/utils/network-logger'
 
 export default function VaultManager() {
   const [isClient, setIsClient] = useState(false)
   const { isConnected, walletInfo } = useWallet()
-  const { 
-    isInitialized, 
-    isInitializing, 
-    error: vaultError, 
+  const {
+    isInitialized,
+    isInitializing,
+    error: vaultError,
     initialize,
     createBookmark,
     readBookmarks,
     updateBookmark,
-    deleteBookmark
+    deleteBookmark,
+    builderDid,
+    collectionId,
+    session,
+    clearVault
   } = useVault(walletInfo?.address || null)
   const autoInitTriggeredRef = useRef(false)
   const lastWalletAddressRef = useRef<string | null>(null)
@@ -28,16 +33,25 @@ export default function VaultManager() {
     walletAddress: walletInfo?.address,
     isInitialized,
     isInitializing,
-    vaultError
+    vaultError,
+    collectionId,
+    builderDid
   })
 
   const [bookmarks, setBookmarks] = useState<BookmarkData[]>([])
   const [loadingBookmarks, setLoadingBookmarks] = useState(false)
   const [vaultInfo, setVaultInfo] = useState<{
-    hasClient: boolean
     collectionId: string | null
-    createdAt: number | null
+    builderDid: string | null
+    initializedAt: number | null
+    walletAddress: string | null
   } | null>(null)
+
+  const formatDid = useCallback((did: string | null | undefined) => {
+    if (!did) return 'N/A'
+    if (did.length <= 24) return did
+    return `${did.slice(0, 12)}…${did.slice(-6)}`
+  }, [])
 
   const loadBookmarks = useCallback(async () => {
     setLoadingBookmarks(true)
@@ -51,6 +65,21 @@ export default function VaultManager() {
     }
   }, [readBookmarks])
 
+  const handleClearVault = useCallback(() => {
+    clearVault()
+    setBookmarks([])
+    setVaultInfo(null)
+    autoInitTriggeredRef.current = false
+  }, [clearVault])
+
+  const handleDownloadLogs = useCallback(() => {
+    try {
+      networkLogger.saveLogs()
+    } catch (error) {
+      console.error('Failed to download network logs:', error)
+    }
+  }, [])
+
   useEffect(() => {
     setIsClient(true)
   }, [])
@@ -61,7 +90,7 @@ export default function VaultManager() {
       autoInitTriggeredRef.current = false
       lastWalletAddressRef.current = walletInfo?.address || null
     }
-    
+
     if (isConnected && walletInfo?.address && !isInitialized && !isInitializing && !autoInitTriggeredRef.current) {
       console.log('🚀 Auto-initializing vault for connected wallet')
       autoInitTriggeredRef.current = true
@@ -70,16 +99,27 @@ export default function VaultManager() {
   }, [isConnected, walletInfo?.address, isInitialized, isInitializing, initialize])
 
   useEffect(() => {
-    if (isInitialized) {
-      loadBookmarks()
-      // Update vault info when initialized
-      setVaultInfo({
-        hasClient: true,
-        collectionId: 'bookmarks', // This would come from the vault session
-        createdAt: Date.now()
-      })
+    if (!isInitialized) {
+      setVaultInfo(null)
+      return
     }
+
+    loadBookmarks()
   }, [isInitialized, loadBookmarks])
+
+  useEffect(() => {
+    if (!isInitialized) {
+      setVaultInfo(null)
+      return
+    }
+
+    setVaultInfo({
+      collectionId: collectionId ?? session?.collectionId ?? null,
+      builderDid: builderDid ?? session?.builderDid ?? null,
+      initializedAt: session?.timestamp ?? null,
+      walletAddress: walletInfo?.address ?? session?.userAddress ?? null
+    })
+  }, [isInitialized, collectionId, builderDid, session, walletInfo?.address])
 
   const handleCreateSampleBookmark = async () => {
     try {
@@ -92,7 +132,7 @@ export default function VaultManager() {
         archived: false,
         favorite: false
       })
-      
+
       // Reload bookmarks
       await loadBookmarks()
     } catch (error) {
@@ -254,17 +294,32 @@ export default function VaultManager() {
                   <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
                   Vault Active
                 </div>
-                <div>Collection: {vaultInfo.collectionId}</div>
-                <div>Connected: {walletInfo?.address?.slice(0, 8)}...</div>
+                <div>Collection: {vaultInfo.collectionId ?? 'Unknown'}</div>
+                <div>Builder DID: {formatDid(vaultInfo.builderDid)}</div>
+                <div>Wallet: {vaultInfo.walletAddress ? `${vaultInfo.walletAddress.slice(0, 8)}…` : 'N/A'}</div>
               </div>
             )}
           </div>
-          <button
-            onClick={handleCreateSampleBookmark}
-            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-          >
-            Add Sample Bookmark
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleCreateSampleBookmark}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+            >
+              Add Sample Bookmark
+            </button>
+            <button
+              onClick={handleDownloadLogs}
+              className="px-4 py-2 border border-blue-200 text-blue-600 rounded-md hover:bg-blue-50 transition-colors"
+            >
+              Download Logs
+            </button>
+            <button
+              onClick={handleClearVault}
+              className="px-4 py-2 border border-red-200 text-red-600 rounded-md hover:bg-red-50 transition-colors"
+            >
+              Clear Vault
+            </button>
+          </div>
         </div>
 
         {loadingBookmarks ? (
@@ -293,8 +348,8 @@ export default function VaultManager() {
                   <div className="flex-1">
                     <h3 className="font-semibold text-gray-900">{bookmark.title}</h3>
                     <p className="text-sm text-gray-600 mb-2">
-                      {typeof bookmark.description === 'string' 
-                        ? bookmark.description 
+                      {typeof bookmark.description === 'string'
+                        ? bookmark.description
                         : bookmark.description["%share"] || 'No description'}
                     </p>
                     <a
@@ -319,11 +374,10 @@ export default function VaultManager() {
                   <div className="flex gap-2 ml-4">
                     <button
                       onClick={() => handleToggleFavorite(bookmark.id, bookmark.favorite)}
-                      className={`p-2 rounded-md ${
-                        bookmark.favorite
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
+                      className={`p-2 rounded-md ${bookmark.favorite
+                        ? 'bg-yellow-100 text-yellow-800'
+                        : 'bg-gray-100 text-gray-600'
+                        }`}
                     >
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -331,11 +385,10 @@ export default function VaultManager() {
                     </button>
                     <button
                       onClick={() => handleToggleArchive(bookmark.id, bookmark.archived)}
-                      className={`p-2 rounded-md ${
-                        bookmark.archived
-                          ? 'bg-gray-100 text-gray-600'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}
+                      className={`p-2 rounded-md ${bookmark.archived
+                        ? 'bg-gray-100 text-gray-600'
+                        : 'bg-blue-100 text-blue-800'
+                        }`}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8l6 6 6-6" />

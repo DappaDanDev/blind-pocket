@@ -1,9 +1,5 @@
-import {
-  SecretVaultBuilderClient,
-  SecretVaultUserClient,
-  NucCmd,
-} from "@nillion/secretvaults";
-import { Keypair, NucTokenBuilder } from "@nillion/nuc";
+import { SecretVaultUserClient } from "@nillion/secretvaults";
+import { Keypair } from "@nillion/nuc";
 import { v4 as uuidv4 } from "uuid";
 import {
   BookmarkData,
@@ -12,38 +8,86 @@ import {
   VaultError,
   VAULT_SESSION_KEY,
   VAULT_CONFIG,
+  VaultInitResponse,
+  DelegationResponse,
 } from "@/types/secretvaults";
 import { networkLogger } from "./network-logger";
 import { signArbitraryMessage } from "./keplr-auth";
 
-// Global vault instances for session persistence
-let builderClient: SecretVaultBuilderClient | null = null;
-let userClient: SecretVaultUserClient | null = null;
-let currentCollectionId: string | null = null;
-let builderKeypair: Keypair | null = null;
-let initializationPromise: Promise<{
-  builderClient: SecretVaultBuilderClient;
+export interface VaultInitializationResult {
   userClient: SecretVaultUserClient;
   collectionId: string;
-}> | null = null;
+  builderDid: string;
+}
 
-// Use a different collection name to avoid conflicts with existing standard collection
-const OWNED_COLLECTION_NAME = "user_bookmarks";
+// Global vault instances for session persistence
+let userClient: SecretVaultUserClient | null = null;
+let currentCollectionId: string | null = null;
+let builderDid: string | null = null;
+let initializationPromise: Promise<VaultInitializationResult> | null = null;
 
-// Function to generate user keypair
-// TODO: Implement deterministic derivation from wallet signature
+const USER_KEY_SIGNATURE_MESSAGE = "Blind Pocket Vault Access";
+
+const base64ToBytes = (value: string): Uint8Array => {
+  const binary = typeof window !== "undefined" && "atob" in window
+    ? window.atob(value)
+    : Buffer.from(value, "base64").toString("binary");
+
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+// Function to generate user keypair deterministically from wallet signature
 const deriveUserKeypair = async (userAddress: string): Promise<Keypair> => {
   try {
-    console.log("🔄 Generating user keypair for:", userAddress);
-    const keypair = Keypair.generate();
-    console.log("✅ User keypair generated successfully");
-    console.log("📋 Keypair created for user:", userAddress);
+    if (!userAddress) {
+      throw new VaultError(
+        "Cannot derive user keypair without wallet address",
+        "MISSING_USER_ADDRESS",
+      );
+    }
 
+    console.log("🔄 Deriving deterministic user keypair for:", userAddress);
+
+    if (typeof window === "undefined" || !window.crypto?.subtle) {
+      throw new VaultError(
+        "Secure key derivation requires browser crypto APIs",
+        "CRYPTO_UNAVAILABLE",
+      );
+    }
+
+    const nonceMessage = `${USER_KEY_SIGNATURE_MESSAGE}\nAddress:${userAddress}`;
+    const signature = await signArbitraryMessage(nonceMessage, userAddress);
+
+    const signatureBytes = base64ToBytes(signature.signature);
+    const digest = await window.crypto.subtle.digest(
+      "SHA-256",
+      signatureBytes as unknown as BufferSource,
+    );
+    const hashBytes = new Uint8Array(digest);
+
+    if (hashBytes.length < 32) {
+      throw new VaultError(
+        "Derived key material is too short",
+        "DERIVATION_FAILED",
+      );
+    }
+
+    const privateKeyBytes = hashBytes.slice(0, 32);
+    const keypair = Keypair.from(privateKeyBytes);
+
+    console.log("✅ Deterministic user keypair derived successfully");
     return keypair;
   } catch (error) {
-    console.error("❌ Failed to create user keypair:", error);
+    console.error("❌ Failed to derive user keypair:", error);
+    if (error instanceof VaultError) {
+      throw error;
+    }
     throw new VaultError(
-      "Failed to create user keypair",
+      error instanceof Error ? error.message : "Failed to derive user keypair",
       "KEYPAIR_CREATION_FAILED",
     );
   }
@@ -52,20 +96,21 @@ const deriveUserKeypair = async (userAddress: string): Promise<Keypair> => {
 export const isVaultAvailable = (): boolean => {
   return (
     typeof window !== "undefined" &&
-    builderClient !== null &&
-    userClient !== null
+    userClient !== null &&
+    currentCollectionId !== null &&
+    builderDid !== null
   );
 };
 
 export const ensureVaultInitialized = async (
   userAddress?: string,
-): Promise<{
-  builderClient: SecretVaultBuilderClient;
-  userClient: SecretVaultUserClient;
-  collectionId: string;
-}> => {
-  if (builderClient && userClient && currentCollectionId) {
-    return { builderClient, userClient, collectionId: currentCollectionId };
+): Promise<VaultInitializationResult> => {
+  if (userClient && currentCollectionId && builderDid) {
+    return {
+      userClient,
+      collectionId: currentCollectionId,
+      builderDid,
+    };
   }
 
   if (!userAddress) {
@@ -80,11 +125,7 @@ export const ensureVaultInitialized = async (
 
 export const initializeVault = async (
   options: VaultInitOptions,
-): Promise<{
-  builderClient: SecretVaultBuilderClient;
-  userClient: SecretVaultUserClient;
-  collectionId: string;
-}> => {
+): Promise<VaultInitializationResult> => {
   if (typeof window === "undefined") {
     throw new VaultError(
       "Vault initialization requires browser environment",
@@ -92,388 +133,105 @@ export const initializeVault = async (
     );
   }
 
-  // If initialization is already in progress, return the existing promise
   if (initializationPromise) {
     console.log("🔄 Vault initialization already in progress, waiting...");
     return initializationPromise;
   }
 
-  // If vault is already initialized for this user, return existing instance
-  if (builderClient && userClient && currentCollectionId) {
+  if (userClient && currentCollectionId && builderDid) {
     console.log("✅ Vault already initialized");
-    return { builderClient, userClient, collectionId: currentCollectionId };
+    return {
+      userClient,
+      collectionId: currentCollectionId,
+      builderDid,
+    };
   }
 
   console.log("🏗️ Initializing SecretVault for user:", options.userAddress);
 
-  // Clear previous logs and start fresh
   networkLogger.clearLogs();
   console.log("📋 Network logging enabled - all requests will be tracked");
 
-  // Create initialization promise to prevent race conditions
   initializationPromise = (async () => {
     try {
-      // Use testnet configuration with correct official URLs
       const config = VAULT_CONFIG.TESTNET;
 
-      console.log("🔧 Using vault configuration:", {
-        chainUrl: config.chainUrl,
-        authUrl: config.authUrl,
-        dbUrls: config.dbUrls,
+      const initResponse = await fetch("/api/nillion/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userAddress: options.userAddress,
+          chainUrl: options.chainUrl || config.chainUrl,
+          authUrl: options.authUrl || config.authUrl,
+          dbUrls: options.dbUrls || config.dbUrls,
+        }),
       });
 
-      // Create keypair from builder private key (following official quickstart)
-      const builderPrivateKey = process.env.NEXT_PUBLIC_NILLION_PRIVATE_KEY;
-      if (!builderPrivateKey) {
+      if (!initResponse.ok) {
+        const errorText = await initResponse.text();
         throw new VaultError(
-          "NEXT_PUBLIC_NILLION_PRIVATE_KEY not found in environment variables",
-          "MISSING_PRIVATE_KEY",
+          `Failed to initialize builder session: ${errorText}`,
+          "BUILDER_INIT_FAILED",
         );
       }
 
-      // Convert hex private key to bytes for Keypair.from()
-      const privateKeyBytes = new Uint8Array(
-        builderPrivateKey.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ||
-          [],
-      );
+      const initData = (await initResponse.json()) as VaultInitResponse;
 
-      const keypair = Keypair.from(privateKeyBytes);
-      builderKeypair = keypair;
-
-      // Initialize SecretVault clients (both builder and user)
-      console.log("🔄 STEP 1: Initializing SecretVault builder client...");
-      let builder, user;
-      try {
-        const clientConfig = {
-          keypair: keypair,
-          urls: {
-            chain: options.chainUrl || config.chainUrl,
-            auth: options.authUrl || config.authUrl,
-            dbs: options.dbUrls || config.dbUrls,
-          },
-        };
-        console.log("📋 Builder client config:", clientConfig);
-
-        builder = await SecretVaultBuilderClient.from(clientConfig);
-        console.log(
-          "✅ STEP 1A COMPLETE: SecretVault builder client initialized",
-        );
-
-        // Refresh root token (following official quickstart)
-        console.log("🔄 STEP 1B: Refreshing builder root token...");
-        await builder.refreshRootToken();
-        console.log("✅ STEP 1B COMPLETE: Builder root token refreshed");
-
-        // Derive user keypair and create user client
-        console.log(
-          "🔄 STEP 1C: Deriving user keypair from wallet signature...",
-        );
-        let userKeypair;
-        try {
-          userKeypair = await deriveUserKeypair(options.userAddress);
-          console.log("✅ User keypair derived successfully");
-          console.log("📋 Keypair type:", typeof userKeypair);
-          console.log("📋 Keypair object:", userKeypair);
-        } catch (keypairError) {
-          console.error("❌ Keypair derivation error:", keypairError);
-          throw keypairError;
-        }
-
-        const userConfig = {
-          keypair: userKeypair,
-          baseUrls: options.dbUrls || config.dbUrls, // User client uses baseUrls array
-        };
-        console.log("📋 User client config:", userConfig);
-
-        user = await SecretVaultUserClient.from(userConfig);
-        console.log("✅ STEP 1C COMPLETE: SecretVault user client initialized");
-      } catch (clientError) {
-        console.error(
-          "❌ STEP 1 FAILED: SecretVault client initialization failed:",
-          clientError,
-        );
-        // Save logs for analysis
-        networkLogger.saveLogs();
+      if (!initData.success) {
         throw new VaultError(
-          `Failed to initialize SecretVault clients: ${clientError instanceof Error ? clientError.message : "Unknown error"}`,
-          "CLIENT_INIT_FAILED",
+          "Builder initialization response indicated failure",
+          "BUILDER_INIT_FAILED",
         );
       }
 
-      // Register builder (required for SecretVault operations)
-      try {
-        console.log("🔄 STEP 3: Registering builder...");
-        const registerPayload = {
-          did: builder.did.toString() as any, // Convert DID object to string and cast
-          name: `BookmarkVault_${options.userAddress.slice(0, 8)}`,
-        };
-        console.log("📋 Register payload:", registerPayload);
-
-        const registerResult = await builder.register(registerPayload);
-        console.log("✅ STEP 3 COMPLETE: Builder registered");
-        console.log("📊 Register result:", registerResult);
-      } catch (error) {
-        console.log("⚠️ STEP 3: Registration error occurred:", error);
-
-        // Try to read the builder profile to check if already registered
-        try {
-          console.log("🔄 Checking if builder already exists...");
-          const profile = await builder.readProfile();
-          console.log("✅ STEP 3 COMPLETE: Builder already exists:", profile);
-        } catch (profileError) {
-          console.error(
-            "❌ STEP 3 FAILED: Builder not registered and registration failed",
-          );
-          throw new VaultError(
-            "Failed to register builder - cannot proceed without registration",
-            "BUILDER_REGISTRATION_FAILED",
-          );
-        }
-      }
-
-      // Set up collection for bookmarks
-      let collectionId: string;
-
-      try {
-        // Try to read existing collections first
-        console.log("🔄 STEP 4: Reading existing collections...");
-        console.log(
-          "🔍 Builder client readCollections method:",
-          typeof builder.readCollections,
-        );
-        console.log(
-          "🔍 OWNED_COLLECTION_NAME we're looking for:",
-          OWNED_COLLECTION_NAME,
-        );
-        const collections = await builder.readCollections();
-        console.log("📋 Collections response:", collections);
-        console.log("📋 Collections data type:", typeof collections.data);
-        console.log("📋 Collections data length:", collections.data?.length);
-        console.log(
-          "📋 Collections data:",
-          JSON.stringify(collections.data, null, 2),
-        );
-
-        // Check for any collection with our name (owned or standard)
-        const existingCollection = collections.data?.find(
-          (col) => col.name === OWNED_COLLECTION_NAME,
-        );
-        console.log("🔍 Found existing collection:", existingCollection);
-        console.log("🔍 Collection type:", existingCollection?.type);
-
-        if (existingCollection) {
-          const collectionObj = existingCollection as Record<string, unknown>;
-          console.log("🔍 Collection object keys:", Object.keys(collectionObj));
-          console.log("🔍 Collection.id:", collectionObj.id);
-          console.log("🔍 Collection._id:", collectionObj._id);
-          console.log("🔍 Collection.name:", collectionObj.name);
-
-          collectionId =
-            (collectionObj.id as string) ||
-            (collectionObj._id as string) ||
-            existingCollection.name;
-
-          if (!collectionId) {
-            console.error(
-              "❌ CRITICAL: Could not extract collection ID from existing collection",
-            );
-            console.error(
-              "❌ Available collection data:",
-              JSON.stringify(collectionObj, null, 2),
-            );
-            throw new Error(
-              "Could not extract collection ID from existing collection",
-            );
-          }
-
-          console.log("✅ Collection ID extracted successfully:", collectionId);
-
-          console.log("✅ STEP 4 COMPLETE: Using existing collection:", {
-            collectionId,
-            collectionName: existingCollection.name,
-            fullCollectionObject: existingCollection,
-          });
-
-          console.log("✅ About to exit collection setup successfully");
-        } else {
-          // Create new collection following official Nillion docs
-          console.log("🔄 STEP 5: Creating new bookmark collection...");
-
-          const newCollectionId = uuidv4();
-          // Using proper JSON Schema format as per Nillion docs
-          // Adding owner field for owned collections (might be required despite DTO)
-          const collection = {
-            _id: newCollectionId,
-            type: "owned" as const,
-            name: OWNED_COLLECTION_NAME,
-            schema: {
-              $schema: "http://json-schema.org/draft-07/schema#",
-              type: "array",
-              uniqueItems: true,
-              items: {
-                type: "object",
-                properties: {
-                  _id: { type: "string", format: "uuid" },
-                  id: { type: "string", format: "uuid" },
-                  title: { type: "string" },
-                  url: { type: "string", format: "uri" },
-                  description: {
-                    type: "object",
-                    properties: {
-                      "%share": { type: "string" },
-                    },
-                    required: ["%share"],
-                  },
-                  image: { type: "string" },
-                  tags: {
-                    type: "array",
-                    items: { type: "string" },
-                  },
-                  archived: { type: "boolean" },
-                  favorite: { type: "boolean" },
-                  created_at: { type: "string", format: "date-time" },
-                },
-                required: ["_id", "id", "title", "url", "created_at"],
-              },
-            },
-          };
-
-          console.log("🔍 DID Info:", {
-            builderDid: builder.did.toString(),
-            userDid: user.did.toString(),
-          });
-
-          console.log(
-            "📋 Creating collection with official structure:",
-            JSON.stringify(collection, null, 2),
-          );
-
-          try {
-            console.log("🔄 Attempting collection creation...");
-            console.log(
-              "📋 Builder client methods available:",
-              Object.getOwnPropertyNames(Object.getPrototypeOf(builder)),
-            );
-            console.log("📋 Builder client state:", {
-              hasRootToken: !!builder.rootToken,
-              clientId: builder.id,
-              didString: builder.did.toString(),
-            });
-
-            const createResults = await builder.createCollection(collection);
-            console.log("✅ Collection creation result:", createResults);
-            collectionId = newCollectionId;
-            console.log(
-              "✅ STEP 5 COMPLETE: Collection created:",
-              collectionId,
-            );
-          } catch (createError) {
-            console.error(
-              "❌ CONFIRMED SDK BUG: Collection creation routing to data endpoint",
-            );
-            console.error("❌ Evidence:");
-            console.error(
-              "  • Our request follows CreateCollectionRequest DTO exactly",
-            );
-            console.error(
-              "  • Error path shows data[0].owner/schema (from CreateOwnedDataRequest validation)",
-            );
-            console.error(
-              "  • SDK routes POST /v1/collections but API receives it as data creation",
-            );
-            console.error("❌ Raw error:", createError);
-
-            // Use fallback - skip collection creation and continue with data operations
-            collectionId = `user_bookmarks_${options.userAddress.slice(-8)}`;
-            console.log(
-              "⚠️ WORKAROUND: Using deterministic collection ID:",
-              collectionId,
-            );
-            console.log(
-              "📋 This allows testing other functionality while SDK bug exists",
-            );
-            console.log(
-              "📋 TODO: Report to Nillion - SDK collection creation routes to wrong endpoint",
-            );
-          }
-        }
-      } catch (error) {
-        console.error("❌ STEP 4/5 FAILED: Collection setup failed:", error);
-        console.error("❌ Error type:", typeof error);
-        console.error("❌ Error constructor:", error?.constructor?.name);
-        console.error("❌ Error stringified:", JSON.stringify(error, null, 2));
-
-        // Save logs for analysis
-        networkLogger.saveLogs();
-
-        let errorMessage = "Unknown error";
-        if (error instanceof Error) {
-          errorMessage = error.message;
-        } else if (typeof error === "string") {
-          errorMessage = error;
-        } else if (error && typeof error === "object") {
-          // Handle error objects that might have an errors array
-          if ("errors" in error && Array.isArray(error.errors)) {
-            errorMessage = error.errors
-              .map((e) => (typeof e === "string" ? e : JSON.stringify(e)))
-              .join(", ");
-          } else if ("message" in error) {
-            errorMessage = String(error.message);
-          } else {
-            errorMessage = JSON.stringify(error);
-          }
-        } else {
-          errorMessage = String(error);
-        }
-
+      if (!initData.collectionId || !initData.builderDid) {
         throw new VaultError(
-          `Failed to setup bookmarks collection: ${errorMessage}`,
-          "COLLECTION_SETUP_FAILED",
+          "Builder initialization response missing required fields",
+          "BUILDER_INIT_FAILED",
         );
       }
 
-      // Cache the instances
-      builderClient = builder;
+      builderDid = initData.builderDid;
+      currentCollectionId = initData.collectionId;
+
+      const effectiveDbUrls = options.dbUrls || config.dbUrls;
+
+      const userKeypair = await deriveUserKeypair(options.userAddress);
+      const user = await SecretVaultUserClient.from({
+        keypair: userKeypair,
+        baseUrls: effectiveDbUrls,
+      });
+
       userClient = user;
-      currentCollectionId = collectionId;
 
-      // Save session
       try {
         const session: VaultSession = {
           userAddress: options.userAddress,
-          collectionId,
+          collectionId: currentCollectionId,
+          builderDid,
           initialized: true,
           timestamp: Date.now(),
         };
-        console.log("🔍 Saving session:", session);
         saveVaultSession(session);
-        console.log("✅ Session saved successfully");
       } catch (sessionError) {
         console.error("❌ Failed to save session:", sessionError);
-        // Don't throw here - session saving failure shouldn't prevent vault initialization
       }
 
-      console.log("✅ STEP 6 COMPLETE: Vault initialization complete");
-
-      // Save logs for analysis
-      console.log("📁 Saving network logs for analysis...");
       networkLogger.saveLogs();
 
-      return { builderClient: builder, userClient: user, collectionId };
+      return {
+        userClient: user,
+        collectionId: currentCollectionId,
+        builderDid,
+      };
     } catch (error) {
       console.error("❌ VAULT INITIALIZATION FAILED:", error);
-
-      // Save logs for analysis before throwing
-      console.log("📁 Saving network logs for troubleshooting...");
       networkLogger.saveLogs();
 
-      // Clear failed initialization state
-      builderClient = null;
       userClient = null;
       currentCollectionId = null;
-      builderKeypair = null;
+      builderDid = null;
 
-      // Don't re-wrap VaultError instances
       if (error instanceof VaultError) {
         throw error;
       }
@@ -486,12 +244,8 @@ export const initializeVault = async (
   })();
 
   try {
-    const result = await initializationPromise;
-    return result;
-  } catch (error) {
-    throw error;
+    return await initializationPromise;
   } finally {
-    // Clear initialization promise after completion
     initializationPromise = null;
   }
 };
@@ -501,14 +255,8 @@ export const createBookmark = async (
   userAddress?: string,
 ): Promise<string> => {
   try {
-    // Ensure vault is initialized
-    const { builderClient, userClient, collectionId } =
+    const { userClient, collectionId, builderDid: activeBuilderDid } =
       await ensureVaultInitialized(userAddress);
-
-    // Ensure builder has a fresh root token
-    console.log("🔄 Refreshing builder root token...");
-    await builderClient.refreshRootToken();
-    console.log("✅ Root token refreshed");
 
     const id = uuidv4();
     const bookmark = {
@@ -517,8 +265,8 @@ export const createBookmark = async (
       title: bookmarkData.title || "",
       url: bookmarkData.url || "",
       description: {
-        "%share": (bookmarkData.description !== undefined && bookmarkData.description !== null) 
-          ? String(bookmarkData.description) 
+        "%share": (bookmarkData.description !== undefined && bookmarkData.description !== null)
+          ? String(bookmarkData.description)
           : "",
       },
       image: bookmarkData.image || "",
@@ -530,38 +278,64 @@ export const createBookmark = async (
 
     console.log("📝 Creating owned bookmark:", bookmark.title);
 
-    // Create delegation token for owned data creation
-    console.log("🔑 Creating delegation token...");
-    console.log("📋 Builder DID:", builderClient.did.toString());
-    console.log("📋 User DID:", userClient.did.toString());
+    console.log("🔑 Requesting delegation token from server...");
+    const delegationResponse = await fetch("/api/nillion/delegation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userDid: userClient.did.toString(),
+        collectionId,
+      }),
+    });
 
-    // Create delegation from builder to user for data creation
-    const delegation = NucTokenBuilder.extending(builderClient.rootToken)
-      .command(NucCmd.nil.db.data.create)
-      .audience(userClient.did)
-      .expiresAt(Math.floor(Date.now() / 1000) + 60) // 60 second expiration
-      .build(builderKeypair!.privateKey());
+    if (!delegationResponse.ok) {
+      const errorText = await delegationResponse.text();
+      throw new VaultError(
+        `Failed to obtain delegation token: ${errorText}`,
+        "DELEGATION_FAILED",
+      );
+    }
+
+    const delegationData = (await delegationResponse.json()) as DelegationResponse;
+
+    if (!delegationData.success || !delegationData.delegation) {
+      throw new VaultError(
+        "Delegation response missing token",
+        "DELEGATION_FAILED",
+      );
+    }
+
+    if (!builderDid) {
+      builderDid = delegationData.builderDid || activeBuilderDid;
+    }
+
+    const aclBuilderDid = builderDid ?? delegationData.builderDid;
+
+    if (!aclBuilderDid) {
+      throw new VaultError(
+        "Unable to determine builder DID for ACL",
+        "DELEGATION_FAILED",
+      );
+    }
 
     console.log("📋 Creating owned data with payload:", {
       owner: userClient.did.toString(),
       collection: collectionId,
       data: [bookmark],
       acl: {
-        grantee: userClient.did.toString(),
+        grantee: aclBuilderDid,
         read: true,
-        write: true,
+        write: false,
         execute: false,
       },
     });
 
-    //test
-
-    const response = await userClient.createData(delegation, {
+    const response = await userClient.createData(delegationData.delegation, {
       owner: userClient.did.toString() as any,
       collection: collectionId,
       data: [bookmark],
       acl: {
-        grantee: builderClient.did.toString() as any, // Builder gets access to read user's data
+        grantee: aclBuilderDid as any,
         read: true,
         write: false,
         execute: false,
@@ -608,7 +382,7 @@ export const readBookmarks = async (
         const normalizedData = {
           ...rawData,
           description: (rawData.description && typeof rawData.description === 'object' && '%share' in rawData.description)
-            ? rawData.description['%share'] 
+            ? rawData.description['%share']
             : (rawData.description || ""),
         };
         bookmarks.push(normalizedData as BookmarkData);
@@ -736,10 +510,10 @@ export const clearVaultSession = (): void => {
 };
 
 export const clearVault = (): void => {
-  builderClient = null;
   userClient = null;
   currentCollectionId = null;
-  builderKeypair = null;
+  builderDid = null;
+  initializationPromise = null;
   clearVaultSession();
   console.log("🧹 Vault cleared");
 };
@@ -756,11 +530,7 @@ export const isVaultSessionValid = (session: VaultSession | null): boolean => {
 
 export const restoreVaultSession = async (
   session: VaultSession,
-): Promise<{
-  builderClient: SecretVaultBuilderClient;
-  userClient: SecretVaultUserClient;
-  collectionId: string;
-} | null> => {
+): Promise<VaultInitializationResult | null> => {
   if (!isVaultSessionValid(session)) {
     console.log("⚠️ Invalid vault session, clearing");
     clearVaultSession();
@@ -770,9 +540,10 @@ export const restoreVaultSession = async (
   try {
     console.log("🔄 Restoring vault session for:", session.userAddress);
 
-    const result = await initializeVault({
-      userAddress: session.userAddress,
-    });
+    builderDid = session.builderDid;
+    currentCollectionId = session.collectionId;
+
+    const result = await initializeVault({ userAddress: session.userAddress });
 
     console.log("✅ Vault session restored");
     return result;
