@@ -1,5 +1,5 @@
 import { SecretVaultBuilderClient, NucCmd } from "@nillion/secretvaults";
-import { Keypair, NucTokenBuilder } from "@nillion/nuc";
+import { Did, Keypair, NucTokenBuilder } from "@nillion/nuc";
 import { v4 as uuidv4 } from "uuid";
 import { VAULT_CONFIG } from "@/types/secretvaults";
 
@@ -185,7 +185,7 @@ export const ensureBuilderSetup = async (
 
 export const createDelegationToken = async (
     params: {
-        userDid: string;
+        userDid: Did;
         expiresInSeconds?: number;
     } & BuilderClientOptions,
 ): Promise<{
@@ -204,7 +204,7 @@ export const createDelegationToken = async (
 
     const delegation = NucTokenBuilder.extending(builder.rootToken)
         .command(NucCmd.nil.db.data.create)
-        .audience(params.userDid as any)
+        .audience(params.userDid)
         .expiresAt(expiresAt)
         .build(keypair.privateKey());
 

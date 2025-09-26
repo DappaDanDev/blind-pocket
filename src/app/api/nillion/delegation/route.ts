@@ -1,3 +1,4 @@
+import { Did, DidSchema } from "@nillion/nuc";
 import { NextResponse } from "next/server";
 import { createDelegationToken } from "@/server/nillion/builder";
 
@@ -20,8 +21,20 @@ export async function POST(request: Request) {
             );
         }
 
+        let userDid: Did;
+        try {
+            userDid = DidSchema.parse(body.userDid);
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Invalid userDid";
+            return NextResponse.json(
+                { success: false, error: `Invalid userDid: ${message}` },
+                { status: 400 },
+            );
+        }
+
         const { delegation, builderDid, expiresAt } = await createDelegationToken({
-            userDid: body.userDid,
+            userDid,
             expiresInSeconds: body.expiresInSeconds,
             chainUrl: body.chainUrl,
             authUrl: body.authUrl,
