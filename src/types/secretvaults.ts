@@ -1,5 +1,3 @@
-import { SecretVaultBuilderClient } from '@nillion/secretvaults'
-
 export interface BookmarkData {
   _id?: string  // SDK required field for records
   id: string
@@ -17,12 +15,13 @@ export interface BookmarkData {
 export interface VaultSession {
   userAddress: string
   collectionId: string
+  builderDid: string | null
   initialized: boolean
   timestamp: number
 }
 
 export interface VaultState {
-  client: SecretVaultBuilderClient | null
+  builderDid: string | null
   collectionId: string | null
   isInitialized: boolean
   isInitializing: boolean
@@ -88,3 +87,16 @@ export const VAULT_CONFIG = {
 } as const
 
 export type VaultEnvironment = keyof typeof VAULT_CONFIG
+
+export interface VaultInitResponse {
+  success: boolean
+  builderDid: string
+  collectionId: string
+}
+
+export interface DelegationResponse {
+  success: boolean
+  delegation: string
+  builderDid: string
+  expiresAt: number
+}

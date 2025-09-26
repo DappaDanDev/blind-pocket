@@ -62,7 +62,7 @@ This is a Next.js project called "blind-pocket" with TypeScript and Tailwind CSS
 - **Chain URL**: `http://rpc.testnet.nilchain-rpc-proxy.nilogy.xyz` (official NILCHAIN_URL)
 - **Auth URL**: https://nilauth.sandbox.app-cluster.sandbox.nilogy.xyz
 - **DB URLs**: Official nilDB testnet nodes (all HTTPS)
-- **Credentials**: NEXT_PUBLIC_NILLION_PRIVATE_KEY (builder private key) from .env
+- **Credentials**: NILLION_BUILDER_KEY (builder private key) from .env
 
 ## What to Test Next
 1. Connect Keplr wallet (should show "Wallet Connected")
