@@ -1,5 +1,6 @@
 import WalletConnect from '@/components/WalletConnect'
 import VaultManager from '@/components/VaultManager'
+import BookmarkManager from '@/components/BookmarkManager'
 import '@/utils/network-logger' // Initialize network logging
 
 export default function Home() {
@@ -36,6 +37,8 @@ export default function Home() {
         </div>
 
         <VaultManager />
+
+        <BookmarkManager />
 
         <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
           <div className="text-center">

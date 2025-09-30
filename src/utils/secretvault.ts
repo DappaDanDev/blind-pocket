@@ -1,4 +1,9 @@
-import { SecretVaultUserClient } from "@nillion/secretvaults";
+import {
+  SecretVaultUserClient,
+  Did as SecretVaultDid,
+  CreateOwnedDataRequest,
+  Uuid,
+} from "@nillion/secretvaults";
 import { Keypair } from "@nillion/nuc";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -38,6 +43,25 @@ const base64ToBytes = (value: string): Uint8Array => {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+};
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null;
+};
+
+const extractBookmarkRecord = (
+  payload: unknown,
+): Record<string, unknown> | null => {
+  if (!isPlainRecord(payload)) {
+    return null;
+  }
+
+  const envelopeData = (payload as { data?: unknown }).data;
+  if (isPlainRecord(envelopeData)) {
+    return envelopeData;
+  }
+
+  return payload;
 };
 
 // Function to generate user keypair deterministically from wallet signature
@@ -318,29 +342,33 @@ export const createBookmark = async (
       );
     }
 
-    console.log("📋 Creating owned data with payload:", {
-      owner: userClient.did.toString(),
-      collection: collectionId,
-      data: [bookmark],
+    const ownerDid = SecretVaultDid.parse(userClient.did.toString());
+    const granteeDid = SecretVaultDid.parse(aclBuilderDid);
+    const collectionUuid = Uuid.parse(collectionId);
+
+    const createPayload: CreateOwnedDataRequest = {
+      owner: ownerDid,
+      collection: collectionUuid,
+      data: [bookmark as Record<string, unknown>],
       acl: {
-        grantee: aclBuilderDid,
+        grantee: granteeDid,
         read: true,
         write: false,
         execute: false,
       },
+    };
+
+    console.log("📋 Creating owned data with payload:", {
+      owner: ownerDid,
+      collection: collectionUuid,
+      data: createPayload.data,
+      acl: createPayload.acl,
     });
 
-    const response = await userClient.createData(delegationData.delegation, {
-      owner: userClient.did.toString() as any,
-      collection: collectionId,
-      data: [bookmark],
-      acl: {
-        grantee: aclBuilderDid as any,
-        read: true,
-        write: false,
-        execute: false,
-      },
-    });
+    const response = await userClient.createData(
+      delegationData.delegation,
+      createPayload,
+    );
 
     console.log("✅ Owned bookmark created:", response);
     return id;
@@ -372,20 +400,38 @@ export const readBookmarks = async (
     const bookmarks: BookmarkData[] = [];
     for (const ref of response.data) {
       try {
-        const response = await userClient.readData({
+        const readResult = await userClient.readData({
           collection: ref.collection,
           document: ref.document,
         });
-        // Extract the actual data from the response
-        const rawData = (response as any).data || response;
-        // Normalize description field from object to string
-        const normalizedData = {
-          ...rawData,
-          description: (rawData.description && typeof rawData.description === 'object' && '%share' in rawData.description)
-            ? rawData.description['%share']
-            : (rawData.description || ""),
+
+        const rawRecord = extractBookmarkRecord(readResult);
+        if (!rawRecord) {
+          console.warn(
+            "⚠️ Received unexpected bookmark payload shape:",
+            { document: ref.document },
+          );
+          continue;
+        }
+
+        const descriptionValue = rawRecord["description"];
+        const normalizedDescription =
+          typeof descriptionValue === "object" &&
+            descriptionValue !== null &&
+            "%share" in (descriptionValue as Record<string, unknown>)
+            ? String(
+              (descriptionValue as Record<string, unknown>)["%share"] ?? "",
+            )
+            : typeof descriptionValue === "string"
+              ? descriptionValue
+              : "";
+
+        const normalizedData: BookmarkData = {
+          ...(rawRecord as BookmarkData),
+          description: normalizedDescription,
         };
-        bookmarks.push(normalizedData as BookmarkData);
+
+        bookmarks.push(normalizedData);
       } catch (error) {
         console.warn("⚠️ Failed to read bookmark:", ref.document, error);
       }
@@ -407,6 +453,8 @@ export const updateBookmark = async (
   _updates: Partial<BookmarkData>,
   _userAddress?: string,
 ): Promise<void> => {
+  void _updates;
+  void _userAddress;
   try {
     // For owned data, we need to read the current data, update it, and create new data
     // This is a limitation of owned data - we can't update in place
@@ -433,8 +481,7 @@ export const deleteBookmark = async (
 ): Promise<void> => {
   try {
     // Ensure vault is initialized
-    const { userClient, collectionId } =
-      await ensureVaultInitialized(userAddress);
+    const { userClient } = await ensureVaultInitialized(userAddress);
 
     console.log("🗑️ Deleting owned bookmark:", id);
 

@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom'
+import { TextDecoder, TextEncoder } from 'util'
 
 // Mock window.keplr for testing
 global.window = global.window || {};
@@ -7,6 +8,9 @@ global.window.keplr = {
   getKey: jest.fn(),
   signArbitrary: jest.fn(),
 }
+
+global.TextEncoder = TextEncoder
+global.TextDecoder = TextDecoder
 
 // Mock sessionStorage
 const mockSessionStorage = {
