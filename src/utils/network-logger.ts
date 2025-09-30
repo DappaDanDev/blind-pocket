@@ -115,8 +115,37 @@ if (typeof window !== 'undefined') {
   window.fetch = async function(input: RequestInfo | URL, init?: RequestInit) {
   const url = input.toString()
   const method = init?.method || 'GET'
-  const headers = init?.headers as Record<string, string> || {}
-  const body = init?.body ? JSON.parse(init.body as string) : undefined
+
+  // Convert headers to a plain object
+  let headers: Record<string, string> = {}
+  if (init?.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((value, key) => {
+        headers[key] = value
+      })
+    } else if (Array.isArray(init.headers)) {
+      init.headers.forEach(([key, value]) => {
+        headers[key] = value
+      })
+    } else {
+      headers = init.headers as Record<string, string>
+    }
+  }
+
+  // Only try to parse body if it's JSON content-type
+  let body: unknown = undefined
+  if (init?.body) {
+    const contentType = headers['content-type'] || headers['Content-Type'] || ''
+    if (contentType.includes('application/json')) {
+      try {
+        body = JSON.parse(init.body as string)
+      } catch {
+        body = init.body
+      }
+    } else {
+      body = init.body
+    }
+  }
 
   // Only log requests to Nillion endpoints
   if (url.includes('nillion') || url.includes('nildb') || url.includes('nilauth') || url.includes('nilchain')) {

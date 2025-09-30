@@ -1,6 +1,6 @@
 'use client'
 
-import { useWallet } from '@/hooks/useWallet'
+import { useWallet } from '@/contexts/WalletContext'
 import { useEffect, useState } from 'react'
 
 export default function WalletConnect() {

@@ -1,5 +1,9 @@
-import { SecretVaultBuilderClient, NucCmd } from "@nillion/secretvaults";
-import { Did, Keypair, NucTokenBuilder } from "@nillion/nuc";
+import {
+    SecretVaultBuilderClient,
+    NucCmd,
+    Did as SecretVaultDid,
+} from "@nillion/secretvaults";
+import { Did as NucDid, Keypair, NucTokenBuilder } from "@nillion/nuc";
 import { v4 as uuidv4 } from "uuid";
 import { VAULT_CONFIG } from "@/types/secretvaults";
 
@@ -72,16 +76,21 @@ const ensureBuilderRegistered = async (
     builder: SecretVaultBuilderClient,
 ): Promise<void> => {
     try {
+        const builderDid = SecretVaultDid.parse(builder.did.toString());
         await builder.register({
-            did: builder.did.toString() as any,
+            did: builderDid,
             name: DEFAULT_BUILDER_NAME,
         });
     } catch (error) {
         try {
             await builder.readProfile();
         } catch (profileError) {
+            const registerReason = error instanceof Error ? error.message : String(error);
+            const profileReason = profileError instanceof Error
+                ? profileError.message
+                : String(profileError);
             throw new Error(
-                `Failed to register builder: ${error instanceof Error ? error.message : String(error)}`,
+                `Failed to register builder: registerError="${registerReason}" profileError="${profileReason}"`,
             );
         }
     }
@@ -185,7 +194,7 @@ export const ensureBuilderSetup = async (
 
 export const createDelegationToken = async (
     params: {
-        userDid: Did;
+        userDid: NucDid;
         expiresInSeconds?: number;
     } & BuilderClientOptions,
 ): Promise<{

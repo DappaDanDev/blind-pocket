@@ -39,7 +39,7 @@ describe('useWallet Hook', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
-    
+
     // Default mock implementations
     mockKeplrAuth.isKeplrInstalled.mockReturnValue(true)
     mockKeplrAuth.loadSession.mockReturnValue(null)
@@ -50,7 +50,7 @@ describe('useWallet Hook', () => {
   describe('initial state', () => {
     it('should initialize with default values', () => {
       const { result } = renderHook(() => useWallet())
-      
+
       expect(result.current.isConnected).toBe(false)
       expect(result.current.isConnecting).toBe(false)
       expect(result.current.walletInfo).toBeNull()
@@ -113,7 +113,7 @@ describe('useWallet Hook', () => {
     })
 
     it('should set connecting state during connection', async () => {
-      mockKeplrAuth.detectAndEnable.mockImplementation(() => 
+      mockKeplrAuth.detectAndEnable.mockImplementation(() =>
         new Promise(resolve => setTimeout(resolve, 100))
       )
       mockKeplrAuth.getWalletInfo.mockResolvedValue(mockWalletInfo)
@@ -226,14 +226,14 @@ describe('useWallet Hook', () => {
   describe('isKeplrInstalled property', () => {
     it('should return Keplr installation status', async () => {
       mockKeplrAuth.isKeplrInstalled.mockReturnValue(true)
-      
+
       const { result } = renderHook(() => useWallet())
-      
+
       // Wait for the effect to complete
       await act(async () => {
         await new Promise(resolve => setTimeout(resolve, 0))
       })
-      
+
       expect(result.current.isKeplrInstalled).toBe(true)
     })
   })

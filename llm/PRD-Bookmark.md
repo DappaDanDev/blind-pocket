@@ -832,19 +832,6 @@ describe('Bookmark Creation Flow', () => {
 - **Backend**: Node.js 20, Express 4, Cheerio 1.0
 - **AI**: NilAI (Llama 3.2 models), OpenAI SDK
 - **Storage**: Nillion SDK, nilDB nodes
-- **Infrastructure**: Docker, Kubernetes, AWS/GCP
-- **Monitoring**: Sentry, DataDog, LogRocket
 
-### B. Compliance Requirements
-- GDPR compliance for EU users
-- CCPA compliance for California residents
-- WCAG 2.1 AA accessibility standards
-- OWASP security best practices
 
-### C. Risk Mitigation
-- **Nillion service unavailability**: Implement temporary local storage
-- **AI service downtime**: Rule-based fallback tagging
-- **Scraping blocked**: User manual metadata entry
-- **Performance degradation**: Implement caching and CDN
 
-This PRD provides comprehensive technical requirements for building a secure, privacy-focused bookmark management system with all requested features and robust error handling.
