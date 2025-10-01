@@ -2,12 +2,13 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
-import { useOptimistic } from 'react'
+import { useOptimistic, startTransition } from 'react'
 import { useBookmarks } from '@/hooks/useBookmarks'
 import type { BookmarkAPIData, SharedSecretString } from '@/types/bookmark'
 
 interface BookmarkCardProps {
     bookmark: BookmarkAPIData
+    onDelete?: () => void
 }
 
 type OptimisticState = BookmarkAPIData & {
@@ -30,7 +31,7 @@ function resolveDescription(description?: SharedSecretString): string | undefine
     return undefined
 }
 
-export function BookmarkCard({ bookmark }: BookmarkCardProps) {
+export function BookmarkCard({ bookmark, onDelete }: BookmarkCardProps) {
     const { remove } = useBookmarks()
     const [optimisticBookmark, applyOptimistic] = useOptimistic<OptimisticState, { type: 'delete' | 'favorite' }>(
         bookmark,
@@ -54,9 +55,12 @@ export function BookmarkCard({ bookmark }: BookmarkCardProps) {
     const description = resolveDescription(optimisticBookmark.description as SharedSecretString)
 
     async function handleDelete() {
-        applyOptimistic({ type: 'delete' })
+        startTransition(() => {
+            applyOptimistic({ type: 'delete' })
+        })
         try {
             await remove(bookmark.id)
+            onDelete?.()
         } catch (error) {
             console.error('Failed to delete bookmark:', error)
         }

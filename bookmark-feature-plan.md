@@ -137,7 +137,7 @@ export class URLValidator {
   private allowedProtocols = ['http:', 'https:'];
   private privateNetworks = [
     '10.0.0.0/8',
-    '172.16.0.0/12', 
+    '172.16.0.0/12',
     '192.168.0.0/16',
     '127.0.0.0/8'
   ];
@@ -149,36 +149,36 @@ export class URLValidator {
     try {
       // 1. Basic URL validation
       const parsed = new URL(url);
-      
+
       // 2. Protocol validation
       if (!this.allowedProtocols.includes(parsed.protocol)) {
         throw new Error('Invalid protocol. Only HTTP/HTTPS allowed.');
       }
-      
+
       // 3. Length validation
       if (url.length > 2048) {
         throw new Error('URL exceeds maximum length of 2048 characters.');
       }
-      
+
       // 4. SSRF prevention
       await this.checkSSRF(parsed);
-      
+
       // 5. URL expansion for shorteners
       const finalURL = await this.expandIfShortened(url, parsed);
-      
+
       return { valid: true, expandedURL: finalURL };
-      
+
     } catch (error) {
-      return { 
-        valid: false, 
-        error: error instanceof Error ? error.message : 'Unknown validation error' 
+      return {
+        valid: false,
+        error: error instanceof Error ? error.message : 'Unknown validation error'
       };
     }
   }
 
   private async checkSSRF(parsed: URL): Promise<void> {
     const ip = await this.resolveHostname(parsed.hostname);
-    
+
     if (this.isPrivateIP(ip) || ip === '169.254.169.254') {
       throw new Error('Access to private networks blocked for security.');
     }
@@ -199,9 +199,9 @@ export class URLValidator {
     if (!this.shortenerDomains.has(parsed.hostname)) {
       return url;
     }
-    
+
     try {
-      const response = await fetch(url, { 
+      const response = await fetch(url, {
         method: 'HEAD',
         redirect: 'follow'
       });
@@ -225,22 +225,22 @@ const validator = new URLValidator();
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json();
-    
+
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
         { error: 'URL is required and must be a string' },
         { status: 400 }
       );
     }
-    
+
     const result = await validator.validateURL(url);
-    
+
     if (result.valid) {
       return NextResponse.json(result);
     } else {
       return NextResponse.json(result, { status: 400 });
     }
-    
+
   } catch (error) {
     return NextResponse.json(
       { error: 'Internal server error during URL validation' },
@@ -273,7 +273,7 @@ export class BookmarkMetadataExtractor {
     // Rate limiting per domain
     const domain = new URL(url).hostname;
     const { success } = await this.ratelimit.limit(`scrape_${domain}`);
-    
+
     if (!success) {
       throw new Error('Rate limit exceeded for this domain');
     }
@@ -415,7 +415,7 @@ const extractor = new BookmarkMetadataExtractor();
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json();
-    
+
     if (!url) {
       return NextResponse.json(
         { error: 'URL is required' },
@@ -425,12 +425,12 @@ export async function POST(request: NextRequest) {
 
     const metadata = await extractor.extractMetadata(url);
     return NextResponse.json(metadata);
-    
+
   } catch (error) {
     console.error('Metadata extraction failed:', error);
-    
+
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to extract metadata',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
@@ -458,13 +458,13 @@ export class NilAITagGenerator {
   constructor() {
     this.client = new OpenAI({
       apiKey: process.env.NILAI_API_KEY,
-      baseURL: process.env.NILAI_BASE_URL || 'https://nilai-a779.nillion.network'
+      baseURL: process.env.NILAI_BASE_URL || 'https://nilai-a779.nillion.network/v1/'
     });
   }
 
   async generateTags(
-    title: string, 
-    url: string, 
+    title: string,
+    url: string,
     contentSnippet?: string
   ): Promise<TagGenerationResult> {
     try {
@@ -472,7 +472,7 @@ export class NilAITagGenerator {
       const userPrompt = this.buildUserPrompt(title, url, contentSnippet);
 
       const response = await this.client.chat.completions.create({
-        model: 'llama-3.2-1b',
+        model: 'google/gemma-3-27b-it',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -503,27 +503,27 @@ export class NilAITagGenerator {
   }
 
   private buildSystemPrompt(): string {
-    return `You are an expert content categorizer for bookmark management. 
-    
+    return `You are an expert content categorizer for bookmark management.
+
     Requirements:
     - Generate exactly 3 relevant tags
     - Use lowercase with hyphens for multi-word tags (e.g., "machine-learning")
     - Focus on content domain, technology, or topic
     - Single words or short phrases (2-3 words max)
     - Be specific and actionable for content discovery
-    
+
     Return only the 3 tags separated by commas, nothing else.`;
   }
 
   private buildUserPrompt(title: string, url: string, contentSnippet?: string): string {
     const domain = new URL(url).hostname;
     const truncatedContent = contentSnippet?.substring(0, 500) || '';
-    
+
     return `Title: ${title}
     Domain: ${domain}
     URL: ${url}
     Content: ${truncatedContent}
-    
+
     Generate 3 relevant tags:`;
   }
 
@@ -545,19 +545,19 @@ export class NilAITagGenerator {
   private generateFallbackTags(title: string, url: string): TagGenerationResult {
     const domain = new URL(url).hostname;
     const tags: string[] = [];
-    
+
     // Extract from domain
     tags.push(domain.replace(/^www\./, '').split('.')[0]);
-    
+
     // Extract from title keywords
     const titleWords = title
       .toLowerCase()
       .split(/\s+/)
       .filter(word => word.length > 3 && !this.isStopWord(word))
       .slice(0, 2);
-    
+
     tags.push(...titleWords);
-    
+
     // Ensure we have exactly 3 tags
     while (tags.length < 3) {
       tags.push('bookmark');
@@ -590,7 +590,7 @@ const tagGenerator = new NilAITagGenerator();
 export async function POST(request: NextRequest) {
   try {
     const { title, url, content } = await request.json();
-    
+
     if (!title || !url) {
       return NextResponse.json(
         { error: 'Title and URL are required' },
@@ -599,17 +599,17 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await tagGenerator.generateTags(title, url, content);
-    
+
     return NextResponse.json({
       tags: result.tags,
       confidence: result.confidence,
       model: result.model,
       fallback: result.fallback || false
     });
-    
+
   } catch (error) {
     console.error('Tag generation failed:', error);
-    
+
     return NextResponse.json(
       { error: 'Failed to generate tags' },
       { status: 500 }
@@ -627,10 +627,10 @@ Create `src/lib/bookmarks/storage.ts`:
 import 'server-only';
 import { BookmarkData, BookmarkAPIData } from '@/types/bookmark';
 // ⚠️ CORRECTED: Use existing vault utilities
-import { 
-  createBookmark as createVaultBookmark, 
+import {
+  createBookmark as createVaultBookmark,
   readBookmarks as readVaultBookmarks,
-  deleteBookmark as deleteVaultBookmark 
+  deleteBookmark as deleteVaultBookmark
 } from '@/utils/secretvault';
 
 export class BookmarkStorage {
@@ -733,7 +733,7 @@ export class BookmarkStorage {
       // ⚠️ CORRECTED: Follow existing pattern - updates not implemented
       console.log('📝 Updating bookmark:', bookmarkId);
       console.log('⚠️ Note: Bookmark updates not yet implemented in current Nillion setup');
-      
+
       // This matches the existing implementation in secretvault.ts
       throw new Error('Bookmark updates not yet implemented for owned collections');
 
@@ -757,7 +757,7 @@ export class BookmarkStorage {
   async incrementAccessCount(userId: string, bookmarkId: string): Promise<void> {
     const bookmarks = await this.getBookmarks(userId);
     const bookmark = bookmarks.find(b => b.id === bookmarkId);
-    
+
     if (bookmark) {
       await this.updateBookmark(userId, bookmarkId, {
         accessCount: bookmark.accessCount + 1,
@@ -767,11 +767,11 @@ export class BookmarkStorage {
   }
 
   private applyFilters(
-    bookmarks: BookmarkData[], 
+    bookmarks: BookmarkData[],
     filters: NonNullable<Parameters<BookmarkStorage['getBookmarks']>[1]>
   ): BookmarkData[] {
     return bookmarks.filter(bookmark => {
-      if (filters.tags && !filters.tags.some(tag => 
+      if (filters.tags && !filters.tags.some(tag =>
         [...bookmark.tags, ...bookmark.aiGeneratedTags].includes(tag)
       )) {
         return false;
@@ -1060,13 +1060,13 @@ export async function createBookmarkAction(formData: FormData) {
 
     const bookmark = await response.json();
     revalidatePath('/bookmarks');
-    
+
     return { success: true, bookmark };
 
   } catch (error) {
-    return { 
-      success: false, 
-      error: 'Failed to create bookmark. Please try again.' 
+    return {
+      success: false,
+      error: 'Failed to create bookmark. Please try again.'
     };
   }
 }
@@ -1139,7 +1139,7 @@ export default async function BookmarksPage({ searchParams }: BookmarksPageProps
         <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-4">
           My Bookmarks
         </h1>
-        
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">
             <BookmarkForm />
@@ -1179,7 +1179,7 @@ export function BookmarkForm() {
     setSuccess(false);
 
     const result = await createBookmarkAction(formData);
-    
+
     if (result.success) {
       setUrl('');
       setPersonalNotes('');
@@ -1225,11 +1225,11 @@ export function BookmarkForm() {
 
       <div className="flex items-center justify-between">
         <SubmitButton />
-        
+
         {error && (
           <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
-        
+
         {success && (
           <p className="text-sm text-green-600 dark:text-green-400">
             Bookmark created successfully!
@@ -1242,7 +1242,7 @@ export function BookmarkForm() {
 
 function SubmitButton() {
   const { pending } = useFormStatus();
-  
+
   return (
     <button
       type="submit"
@@ -1307,7 +1307,7 @@ export function BookmarkCard({ bookmark }: BookmarkCardProps) {
   }
 
   return (
-    <article 
+    <article
       className={`bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow ${
         optimisticBookmark.deleting ? 'opacity-50 pointer-events-none' : ''
       }`}
@@ -1330,17 +1330,17 @@ export function BookmarkCard({ bookmark }: BookmarkCardProps) {
             </svg>
           </div>
         )}
-        
+
         {/* Favorite Button */}
         <button
           onClick={handleToggleFavorite}
           className="absolute top-2 right-2 p-2 rounded-full bg-black bg-opacity-50 hover:bg-opacity-70 transition-colors"
           aria-label={optimisticBookmark.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
         >
-          <svg 
-            className={`w-4 h-4 ${optimisticBookmark.isFavorite ? 'text-yellow-400' : 'text-white'}`} 
-            fill={optimisticBookmark.isFavorite ? 'currentColor' : 'none'} 
-            stroke="currentColor" 
+          <svg
+            className={`w-4 h-4 ${optimisticBookmark.isFavorite ? 'text-yellow-400' : 'text-white'}`}
+            fill={optimisticBookmark.isFavorite ? 'currentColor' : 'none'}
+            stroke="currentColor"
             viewBox="0 0 24 24"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
@@ -1363,7 +1363,7 @@ export function BookmarkCard({ bookmark }: BookmarkCardProps) {
             )}
             <span>{new URL(bookmark.url).hostname}</span>
           </div>
-          
+
           {/* Action Menu */}
           <div className="flex space-x-1">
             <button
@@ -1379,7 +1379,7 @@ export function BookmarkCard({ bookmark }: BookmarkCardProps) {
         </div>
 
         <h3 id={`bookmark-title-${bookmark.id}`} className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 line-clamp-2">
-          <Link 
+          <Link
             href={bookmark.url}
             target="_blank"
             rel="noopener noreferrer"
@@ -1445,7 +1445,7 @@ interface BookmarkGridProps {
 
 async function getBookmarks(searchParams: BookmarkGridProps['searchParams']): Promise<BookmarkData[]> {
   const params = new URLSearchParams();
-  
+
   if (searchParams.tags) params.set('tags', searchParams.tags);
   if (searchParams.page) params.set('page', searchParams.page);
   if (searchParams.archived) params.set('archived', searchParams.archived);
@@ -1506,15 +1506,15 @@ export function BookmarkSearch() {
 
   const handleSearch = useDebouncedCallback((term: string) => {
     const params = new URLSearchParams(searchParams);
-    
+
     if (term) {
       params.set('q', term);
     } else {
       params.delete('q');
     }
-    
+
     params.delete('page'); // Reset to first page on new search
-    
+
     router.push(`/bookmarks?${params.toString()}`);
   }, 300);
 
@@ -1559,7 +1559,7 @@ export function BookmarkSkeleton({ count = 6 }: BookmarkSkeletonProps) {
         <div key={i} className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden animate-pulse">
           {/* Image skeleton */}
           <div className="aspect-video bg-gray-200 dark:bg-gray-700" />
-          
+
           {/* Content skeleton */}
           <div className="p-4">
             {/* Domain */}
@@ -1567,25 +1567,25 @@ export function BookmarkSkeleton({ count = 6 }: BookmarkSkeletonProps) {
               <div className="w-4 h-4 bg-gray-200 dark:bg-gray-700 rounded" />
               <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-24" />
             </div>
-            
+
             {/* Title */}
             <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded mb-2" />
             <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-3" />
-            
+
             {/* Description */}
             <div className="space-y-2 mb-3">
               <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded" />
               <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded" />
               <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/2" />
             </div>
-            
+
             {/* Tags */}
             <div className="flex space-x-2 mb-3">
               <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded-full w-16" />
               <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded-full w-20" />
               <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded-full w-12" />
             </div>
-            
+
             {/* Footer */}
             <div className="flex justify-between pt-3 border-t border-gray-200 dark:border-gray-700">
               <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-16" />
@@ -1646,7 +1646,7 @@ export default function Loading() {
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
         <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-48 mb-4 animate-pulse" />
-        
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">
             <div className="space-y-4">
@@ -1691,11 +1691,11 @@ export async function middleware(request: NextRequest) {
 
     if (!success) {
       return NextResponse.json(
-        { 
+        {
           error: 'Too many requests. Please try again later.',
           retryAfter: Math.round((reset - Date.now()) / 1000)
         },
-        { 
+        {
           status: 429,
           headers: {
             'X-RateLimit-Limit': limit.toString(),
@@ -1711,7 +1711,7 @@ export async function middleware(request: NextRequest) {
     response.headers.set('X-RateLimit-Limit', limit.toString());
     response.headers.set('X-RateLimit-Remaining', remaining.toString());
     response.headers.set('X-RateLimit-Reset', reset.toString());
-    
+
     return response;
   }
 
@@ -1773,7 +1773,7 @@ describe('/api/bookmarks', () => {
     it('creates bookmark with valid data', async () => {
       const request = new NextRequest('http://localhost:3000/api/bookmarks', {
         method: 'POST',
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           url: 'https://example.com',
           personalNotes: 'Test note'
         }),
@@ -1952,7 +1952,7 @@ export const getBookmarkMetadataCache = unstable_cache(
 - **Use existing**: Delegation-based architecture with `/api/nillion/*` endpoints
 - **Maintain**: Current owned data pattern with builder DID and collection management
 
-### 2. Authentication System ⚠️ CORRECTED  
+### 2. Authentication System ⚠️ CORRECTED
 - **Use existing**: Keplr wallet-based authentication with deterministic keypair derivation
 - **Integrate**: User address extraction from wallet signatures (not generic userId)
 - **Preserve**: Current session management and wallet connection patterns
@@ -2017,14 +2017,14 @@ export const getBookmarkMetadataCache = unstable_cache(
 
 ### What Remains Valid:
 - URL validation and sanitization (Phases 2)
-- Metadata extraction with Cheerio (Phase 3)  
+- Metadata extraction with Cheerio (Phase 3)
 - AI tag generation with NilAI (Phase 4)
 - UI components and user experience (Phase 7-8)
 - Testing and performance strategies (Phase 9-10)
 
 ## Conclusion
 
-This **corrected** implementation plan now accurately reflects the existing Nillion SecretVault architecture in the blind-pocket codebase. The plan leverages the delegation-based owned data pattern already implemented, ensuring compatibility and maintainability. 
+This **corrected** implementation plan now accurately reflects the existing Nillion SecretVault architecture in the blind-pocket codebase. The plan leverages the delegation-based owned data pattern already implemented, ensuring compatibility and maintainability.
 
 The bookmark feature will integrate seamlessly with the existing Keplr wallet authentication and vault management system, providing a privacy-first bookmark experience that aligns with the project's architectural decisions.
 

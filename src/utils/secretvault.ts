@@ -485,15 +485,40 @@ export const deleteBookmark = async (
 
     console.log("🗑️ Deleting owned bookmark:", id);
 
-    // For owned data, we delete by data ID (not application ID)
-    // First find the data reference by application ID
+    // For owned data, we need to read each bookmark to find the one with matching application ID
     const references = await userClient.listDataReferences();
+    console.log(`📋 Found ${references.data.length} bookmark references`);
 
-    const targetRef = references.data.find((ref) => {
-      // We need to check if this reference contains our bookmark ID
-      // This is a limitation - we might need to read each one to find the right one
-      return ref.document === id || ref.collection === id;
-    });
+    let targetRef = null;
+
+    // Read each bookmark to find the one with matching application ID
+    for (const ref of references.data) {
+      try {
+        const readResult = await userClient.readData({
+          collection: ref.collection,
+          document: ref.document,
+        });
+
+        const rawRecord = extractBookmarkRecord(readResult);
+        if (!rawRecord) {
+          console.warn("⚠️ Unexpected bookmark payload shape, skipping");
+          continue;
+        }
+
+        // Check if this bookmark's application ID matches the target
+        if (rawRecord.id === id) {
+          targetRef = ref;
+          console.log("✅ Found bookmark to delete:", {
+            applicationId: id,
+            documentId: ref.document,
+          });
+          break;
+        }
+      } catch (error) {
+        console.warn("⚠️ Failed to read bookmark reference:", error);
+        continue;
+      }
+    }
 
     if (!targetRef) {
       throw new VaultError(
@@ -502,12 +527,13 @@ export const deleteBookmark = async (
       );
     }
 
+    // Delete using the vault's document ID
     await userClient.deleteData({
       collection: targetRef.collection,
       document: targetRef.document,
     });
 
-    console.log("✅ Owned bookmark deleted");
+    console.log("✅ Owned bookmark deleted successfully");
   } catch (error) {
     console.error("❌ Failed to delete bookmark:", error);
     throw new VaultError(

@@ -6,51 +6,55 @@ import { useBookmarks } from '@/hooks/useBookmarks'
 import type { BookmarkAPIData } from '@/types/bookmark'
 import { useWallet } from '@/contexts/WalletContext'
 
-export function BookmarkList() {
+interface BookmarkListProps {
+  refreshTrigger?: number
+}
+
+export function BookmarkList({ refreshTrigger }: BookmarkListProps) {
   const { isConnected, walletInfo } = useWallet()
   const { list } = useBookmarks()
   const [bookmarks, setBookmarks] = useState<BookmarkAPIData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const fetchBookmarks = async () => {
     if (!isConnected || !walletInfo) {
       setBookmarks([])
       setLoading(false)
       return
     }
 
-    const fetchBookmarks = async () => {
-      try {
-        setLoading(true)
-        setError(null)
+    try {
+      setLoading(true)
+      setError(null)
 
-        const data = await list()
-        // Convert BookmarkData to BookmarkAPIData format
-        const formattedBookmarks = data.map((bookmark) => ({
-          ...bookmark,
-          _id: bookmark._id || bookmark.id,
-          userId: walletInfo.address,
-          previewImage: bookmark.image,
-          aiGeneratedTags: bookmark.tags || [],
-          isArchived: bookmark.archived || false,
-          isFavorite: bookmark.favorite || false,
-          createdAt: bookmark.created_at,
-          updatedAt: bookmark.created_at,
-          accessCount: 0,
-        })) as BookmarkAPIData[]
+      const data = await list()
+      // Convert BookmarkData to BookmarkAPIData format
+      const formattedBookmarks = data.map((bookmark) => ({
+        ...bookmark,
+        _id: bookmark._id || bookmark.id,
+        userId: walletInfo.address,
+        previewImage: bookmark.image,
+        aiGeneratedTags: bookmark.tags || [],
+        isArchived: bookmark.archived || false,
+        isFavorite: bookmark.favorite || false,
+        createdAt: bookmark.created_at,
+        updatedAt: bookmark.created_at,
+        accessCount: 0,
+      })) as BookmarkAPIData[]
 
-        setBookmarks(formattedBookmarks)
-      } catch (err) {
-        setError('Failed to load bookmarks')
-        console.error('Error fetching bookmarks:', err)
-      } finally {
-        setLoading(false)
-      }
+      setBookmarks(formattedBookmarks)
+    } catch (err) {
+      setError('Failed to load bookmarks')
+      console.error('Error fetching bookmarks:', err)
+    } finally {
+      setLoading(false)
     }
+  }
 
+  useEffect(() => {
     fetchBookmarks()
-  }, [isConnected, walletInfo, list])
+  }, [isConnected, walletInfo, list, refreshTrigger])
 
   if (!isConnected) {
     return (
@@ -111,10 +115,14 @@ export function BookmarkList() {
     )
   }
 
+  const handleBookmarkDeleted = () => {
+    fetchBookmarks()
+  }
+
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
       {bookmarks.map((bookmark) => (
-        <BookmarkCard key={bookmark.id} bookmark={bookmark} />
+        <BookmarkCard key={bookmark.id} bookmark={bookmark} onDelete={handleBookmarkDeleted} />
       ))}
     </div>
   )

@@ -3,7 +3,11 @@
 import { useState, useRef, FormEvent } from 'react'
 import { useBookmarks } from '@/hooks/useBookmarks'
 
-export function BookmarkForm() {
+interface BookmarkFormProps {
+    onBookmarkAdded?: () => void
+}
+
+export function BookmarkForm({ onBookmarkAdded }: BookmarkFormProps) {
     const formRef = useRef<HTMLFormElement>(null)
     const { create, isCreating, error } = useBookmarks()
     const [success, setSuccess] = useState(false)
@@ -20,6 +24,7 @@ export function BookmarkForm() {
             await create({ url, personalNotes: personalNotes || undefined })
             formRef.current?.reset()
             setSuccess(true)
+            onBookmarkAdded?.()
 
             setTimeout(() => {
                 formRef.current?.querySelector<HTMLInputElement>('#url')?.focus()

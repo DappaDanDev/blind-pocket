@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useWallet } from '@/contexts/WalletContext'
 import { BookmarkForm } from '@/components/bookmarks/bookmark-form'
 import { BookmarkSearch } from '@/components/bookmarks/bookmark-search'
@@ -7,6 +8,11 @@ import { BookmarkList } from '@/components/bookmarks/bookmark-list'
 
 export default function BookmarkManager() {
   const { isConnected, walletInfo } = useWallet()
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  const handleBookmarkAdded = () => {
+    setRefreshTrigger(prev => prev + 1)
+  }
 
   if (!isConnected || !walletInfo) {
     return null // Don't show anything if wallet is not connected
@@ -25,7 +31,7 @@ export default function BookmarkManager() {
         <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
           <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
             <h3 className="mb-4 text-xl font-semibold text-gray-900 dark:text-gray-100">Add a bookmark</h3>
-            <BookmarkForm />
+            <BookmarkForm onBookmarkAdded={handleBookmarkAdded} />
           </div>
 
           <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -35,7 +41,7 @@ export default function BookmarkManager() {
         </div>
       </div>
 
-      <BookmarkList />
+      <BookmarkList refreshTrigger={refreshTrigger} />
     </div>
   )
 }
