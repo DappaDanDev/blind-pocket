@@ -34,9 +34,10 @@ let initializationPromise: Promise<VaultInitializationResult> | null = null;
 const USER_KEY_SIGNATURE_MESSAGE = "Blind Pocket Vault Access";
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof window !== "undefined" && "atob" in window
-    ? window.atob(value)
-    : Buffer.from(value, "base64").toString("binary");
+  const binary =
+    typeof window !== "undefined" && "atob" in window
+      ? window.atob(value)
+      : Buffer.from(value, "base64").toString("binary");
 
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
@@ -279,8 +280,11 @@ export const createBookmark = async (
   userAddress?: string,
 ): Promise<string> => {
   try {
-    const { userClient, collectionId, builderDid: activeBuilderDid } =
-      await ensureVaultInitialized(userAddress);
+    const {
+      userClient,
+      collectionId,
+      builderDid: activeBuilderDid,
+    } = await ensureVaultInitialized(userAddress);
 
     const id = uuidv4();
     const bookmark = {
@@ -289,9 +293,11 @@ export const createBookmark = async (
       title: bookmarkData.title || "",
       url: bookmarkData.url || "",
       description: {
-        "%share": (bookmarkData.description !== undefined && bookmarkData.description !== null)
-          ? String(bookmarkData.description)
-          : "",
+        "%share":
+          bookmarkData.description !== undefined &&
+          bookmarkData.description !== null
+            ? String(bookmarkData.description)
+            : "",
       },
       image: bookmarkData.image || "",
       tags: bookmarkData.tags || [],
@@ -320,7 +326,8 @@ export const createBookmark = async (
       );
     }
 
-    const delegationData = (await delegationResponse.json()) as DelegationResponse;
+    const delegationData =
+      (await delegationResponse.json()) as DelegationResponse;
 
     if (!delegationData.success || !delegationData.delegation) {
       throw new VaultError(
@@ -407,21 +414,20 @@ export const readBookmarks = async (
 
         const rawRecord = extractBookmarkRecord(readResult);
         if (!rawRecord) {
-          console.warn(
-            "⚠️ Received unexpected bookmark payload shape:",
-            { document: ref.document },
-          );
+          console.warn("⚠️ Received unexpected bookmark payload shape:", {
+            document: ref.document,
+          });
           continue;
         }
 
         const descriptionValue = rawRecord["description"];
         const normalizedDescription =
           typeof descriptionValue === "object" &&
-            descriptionValue !== null &&
-            "%share" in (descriptionValue as Record<string, unknown>)
+          descriptionValue !== null &&
+          "%share" in (descriptionValue as Record<string, unknown>)
             ? String(
-              (descriptionValue as Record<string, unknown>)["%share"] ?? "",
-            )
+                (descriptionValue as Record<string, unknown>)["%share"] ?? "",
+              )
             : typeof descriptionValue === "string"
               ? descriptionValue
               : "";
